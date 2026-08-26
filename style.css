@@ -869,6 +869,34 @@ body.cockpit-mode #cockpit-cloud-effects.active {
   animation: pulse 2s ease-in-out infinite;
 }
 
+#renderer-compat-status {
+  position: fixed;
+  z-index: 205;
+  top: max(14px, env(safe-area-inset-top));
+  left: 50%;
+  max-width: min(520px, calc(100vw - 32px));
+  padding: 8px 12px;
+  transform: translateX(-50%);
+  border: 1px solid rgba(255, 190, 74, 0.48);
+  border-radius: 6px;
+  background: rgba(12, 22, 32, 0.94);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28);
+  color: #ffd17a;
+  font: 700 9px/1.35 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-align: center;
+}
+
+#renderer-compat-status[data-state="restarted"] {
+  border-color: rgba(98, 245, 176, 0.5);
+  color: #7dffc0;
+}
+
+#renderer-compat-status[data-state="failed"] {
+  border-color: rgba(255, 95, 102, 0.58);
+  color: #ff8f94;
+}
+
 @keyframes pulse {
   0%, 100% { opacity: 0.4; }
   50% { opacity: 1; }
