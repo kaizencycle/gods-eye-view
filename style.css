@@ -4502,6 +4502,7 @@ body.cockpit-mode #intel-hud .hud-right-edge { right: 22px; }
 }
 #right-context-rail > #pp-toggles,
 #right-context-rail > #cctv-panel,
+#right-context-rail > #terminal-instruments-panel,
 #right-context-rail > #global-context-panel {
   position: relative;
   inset: auto;
@@ -4578,6 +4579,7 @@ body.cockpit-mode #intel-hud .hud-right-edge { right: 22px; }
 }
 #right-context-rail.layout-focus > #pp-toggles:not(.collapsed),
 #right-context-rail.layout-focus > #cctv-panel:not(.collapsed),
+#right-context-rail.layout-focus > #terminal-instruments-panel:not(.collapsed),
 #right-context-rail.layout-focus > #global-context-panel:not(.collapsed) {
   flex: 0 1 var(--right-panel-allocated-height);
   height: var(--right-panel-allocated-height);
@@ -6941,6 +6943,8 @@ body.scene-playback-mode :is(#clear-selected-layers, #reset-globe-view) {
   #right-context-rail #cctv-panel.collapsed,
   #right-context-rail #radio-panel,
   #right-context-rail #radio-panel.collapsed,
+  #right-context-rail #terminal-instruments-panel,
+  #right-context-rail #terminal-instruments-panel.collapsed,
   #right-context-rail #global-context-panel,
   #right-context-rail #global-context-panel.collapsed {
     width: 100%;

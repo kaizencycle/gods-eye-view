@@ -1,0 +1,209 @@
+#right-context-rail > #terminal-instruments-panel {
+  position: relative;
+  inset: auto;
+  width: 100%;
+  max-height: min(430px, var(--right-stack-max-height, 70vh));
+  flex: 0 1 auto;
+  pointer-events: auto;
+}
+
+.terminal-instruments-inner {
+  position: relative;
+  display: flex;
+  min-height: 0;
+  max-height: inherit;
+  flex-direction: column;
+  padding: 12px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--panel-radius);
+  background: var(--glass-bg);
+  box-shadow: var(--shadow-panel);
+  backdrop-filter: blur(24px) saturate(1.4);
+  -webkit-backdrop-filter: blur(24px) saturate(1.4);
+}
+
+#terminal-instruments-panel.collapsed {
+  width: var(--right-display-collapsed-width);
+  margin-left: auto;
+}
+
+#terminal-instruments-panel.collapsed .terminal-instruments-inner {
+  width: 100%;
+  min-height: 50px;
+  box-sizing: border-box;
+  justify-content: center;
+  padding: 8px 10px;
+}
+
+#terminal-instruments-panel.collapsed [data-terminal-instruments-body] {
+  display: none;
+}
+
+.terminal-instruments-body {
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 212, 255, 0.4) transparent;
+}
+
+.terminal-connection {
+  margin-bottom: 8px;
+  font: 700 8px/1 var(--font-mono);
+  letter-spacing: 0.18em;
+}
+
+.terminal-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.terminal-metric,
+.terminal-evidence,
+.terminal-instruments-section {
+  min-width: 0;
+  border: 1px solid rgba(98, 181, 255, 0.2);
+  border-radius: 6px;
+  background: rgba(4, 17, 31, 0.48);
+}
+
+.terminal-metric {
+  display: grid;
+  gap: 3px;
+  padding: 7px;
+}
+
+.terminal-metric-label,
+.terminal-section-label {
+  color: rgba(143, 207, 255, 0.68);
+  font: 600 7px/1.2 var(--font-mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.terminal-metric-value {
+  overflow: hidden;
+  color: #e9f8ff;
+  font: 700 15px/1.1 var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-metric-detail,
+.terminal-evidence-detail,
+.terminal-empty-state {
+  margin: 0;
+  color: rgba(194, 226, 244, 0.65);
+  font: 7px/1.35 var(--font-mono);
+}
+
+.terminal-evidence,
+.terminal-instruments-section {
+  display: grid;
+  gap: 6px;
+  margin-top: 7px;
+  padding: 8px;
+}
+
+.terminal-evidence-status {
+  font: 700 9px/1.2 var(--font-mono);
+  letter-spacing: 0.08em;
+}
+
+.terminal-packet-id {
+  color: rgba(194, 226, 244, 0.72);
+  font: 7px/1.2 var(--font-mono);
+}
+
+.terminal-agent-list,
+.terminal-instrument-list,
+.terminal-alert-list {
+  display: grid;
+  gap: 4px;
+}
+
+.terminal-instrument-list {
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+.terminal-agent-row,
+.terminal-instrument-row,
+.terminal-alert {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 7px;
+  align-items: center;
+  padding: 5px 6px;
+  border-left: 2px solid rgba(0, 212, 255, 0.45);
+  background: rgba(5, 25, 42, 0.55);
+  color: #dff5ff;
+  font: 8px/1.2 var(--font-mono);
+}
+
+.terminal-agent-row small,
+.terminal-instrument-row small,
+.terminal-alert small {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  color: rgba(194, 226, 244, 0.58);
+  font-size: 7px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-alert-warning {
+  border-left-color: #ffb84a;
+}
+
+.terminal-alert-critical {
+  border-left-color: #ff5f66;
+}
+
+.terminal-tone-ok {
+  color: #62f5b0;
+}
+
+.terminal-tone-warning {
+  color: #ffca62;
+}
+
+.terminal-tone-danger,
+.terminal-bridge-error {
+  color: #ff7c82;
+}
+
+.terminal-tone-neutral {
+  color: #7dcfff;
+}
+
+.terminal-bridge-error {
+  margin: 0 0 8px;
+  font: 7px/1.35 var(--font-mono);
+}
+
+.terminal-connection-detail {
+  margin: -3px 0 8px;
+  color: #ffca62;
+  font: 7px/1.35 var(--font-mono);
+}
+
+#right-context-rail.layout-focus > #terminal-instruments-panel:not(.collapsed) {
+  height: var(--right-panel-allocated-height);
+  min-height: 0;
+  max-height: var(--right-panel-allocated-height);
+  flex: 0 1 var(--right-panel-allocated-height);
+}
+
+#right-context-rail.layout-focus > #terminal-instruments-panel:not(.collapsed)
+  .terminal-instruments-inner {
+  height: 100%;
+  box-sizing: border-box;
+}
+
+@media (max-width: 768px) {
+  #terminal-instruments-panel {
+    display: none !important;
+  }
+}

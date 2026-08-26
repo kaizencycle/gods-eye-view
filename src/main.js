@@ -29,6 +29,10 @@ import {
   isTrackingSelectionGesture,
 } from './data/trackingClickGesture.js';
 import { attachMobiusAdapter } from '../packages/mobius-integrity/index.js';
+import { TerminalBridge } from '../packages/mobius-integration/terminalBridge.js';
+import { attachPacketVerification } from '../packages/mobius-integration/packetVerification.js';
+import { attachInstrumentPanel } from './hud/instrumentPanel.js';
+import './hud/instrumentPanel.css';
 import {
   installRenderGovernor,
   getRenderGovernorDiagnostics,
@@ -67,6 +71,13 @@ function describeError(error) {
   return String(error);
 }
 
+function terminalPollInterval(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed)
+    ? Math.max(5_000, Math.min(300_000, Math.floor(parsed)))
+    : 15_000;
+}
+
 /**
  * GOD'S EYE VIEW — Main Entry Point
  * Initializes CesiumJS with Google Photorealistic 3D Tiles,
@@ -75,6 +86,11 @@ function describeError(error) {
 async function init() {
   const loadingScreen = document.getElementById('loading-screen');
   const loaderStatus = loadingScreen.querySelector('.loader-status');
+  let terminalBridge = null;
+  let packetVerification = null;
+  let instrumentPanel = null;
+  let destroyTerminalIntegration = null;
+  let terminalPageHideHandler = null;
 
   try {
     loaderStatus.textContent = 'Configuring viewer...';
@@ -265,6 +281,42 @@ async function init() {
         return () => unregisterPickOwner(ownerId);
       },
     });
+    if (import.meta.env.VITE_TERMINAL_INSTRUMENTS_ENABLED === 'true') {
+      terminalBridge = new TerminalBridge({
+        terminalUrl: import.meta.env.VITE_TERMINAL_API_URL
+          || 'https://terminal.mobius-substrate.com',
+        pollMs: terminalPollInterval(import.meta.env.VITE_TERMINAL_POLL_MS),
+        liveUpdates: import.meta.env.VITE_TERMINAL_LIVE_UPDATES !== 'false',
+        // Browser verification remains disabled unless a same-origin server
+        // proxy is explicitly configured. Service credentials never enter Vite.
+        verifyEndpoint: import.meta.env.VITE_TERMINAL_VERIFY_ENDPOINT || null,
+      });
+      packetVerification = attachPacketVerification({
+        mobiusAdapter,
+        bridge: terminalBridge,
+      });
+      destroyTerminalIntegration = () => {
+        if (terminalPageHideHandler) {
+          window.removeEventListener('pagehide', terminalPageHideHandler);
+          terminalPageHideHandler = null;
+        }
+        instrumentPanel?.destroy();
+        packetVerification?.destroy();
+        terminalBridge?.destroy();
+      };
+      instrumentPanel = attachInstrumentPanel({
+        bridge: terminalBridge,
+        verification: packetVerification,
+      });
+      terminalPageHideHandler = (event) => {
+        if (event.persisted !== true) destroyTerminalIntegration?.();
+      };
+      window.addEventListener('pagehide', terminalPageHideHandler);
+      void terminalBridge.initialize().then((connected) => {
+        if (connected) console.info('[World] Terminal bridge connected');
+        else console.warn('[World] Terminal bridge offline; retaining local EPICON capture');
+      });
+    }
     styleManager.attachDataManager(dataManager);
 
     // Initialize deterministic scene playback for social clip capture
@@ -345,6 +397,9 @@ async function init() {
       mapStackController,
       annotations,
       mobiusAdapter,
+      terminalBridge,
+      packetVerification,
+      instrumentPanel,
       weatherEffects,
       cockpitCloudEffects,
       getRenderGovernorDiagnostics,
@@ -353,6 +408,7 @@ async function init() {
     window.__godsEyeView.voiceCommands = initGevVoiceCommands({ viewer, styleManager, dataManager, sceneDirector, annotations });
 
   } catch (error) {
+    destroyTerminalIntegration?.();
     console.error("God's Eye View initialization failed:", error);
     loaderStatus.textContent = `Error: ${describeError(error)}`;
     loaderStatus.style.color = '#ff4444';
