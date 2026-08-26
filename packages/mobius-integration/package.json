@@ -1,0 +1,18 @@
+{
+  "name": "@mobius/mobius-integration",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Polling-first World Renderer bridge for Mobius Terminal",
+  "license": "MIT",
+  "exports": {
+    "./bridge": "./terminalBridge.js",
+    "./verification": "./packetVerification.js"
+  },
+  "scripts": {
+    "test": "node --test __tests__/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=24.14.0 <25 || >=26 <27"
+  }
+}

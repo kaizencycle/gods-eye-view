@@ -684,6 +684,26 @@
 
   <!-- Global Context is deliberately independent from the left layer accordion. -->
   <aside id="right-context-rail">
+    <section id="terminal-instruments-panel" class="panel-collapsible" data-panel-id="terminal-instruments-panel" hidden>
+      <div class="panel-glow"></div>
+      <div class="terminal-instruments-inner">
+        <div class="panel-header">
+          <span class="panel-title">MOBIUS INSTRUMENTS</span>
+          <span class="panel-divider"></span>
+          <button
+            class="panel-collapse-btn"
+            data-collapse-target="terminal-instruments-panel"
+            title="Collapse Mobius instruments"
+            aria-label="Collapse Mobius instruments"
+          >&#x25C0;</button>
+        </div>
+        <div
+          class="terminal-instruments-body"
+          data-terminal-instruments-body
+          aria-label="Mobius Terminal instruments"
+        ></div>
+      </div>
+    </section>
     <div id="global-context-panel" class="panel-collapsible collapsed" data-panel-id="global-context-panel">
       <div class="panel-glow"></div>
       <div class="global-context-panel-inner">
