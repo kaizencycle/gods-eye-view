@@ -1,4 +1,5 @@
 import * as Cesium from 'cesium';
+import { setCameraHomeActive } from './cameraHomeState.js';
 import { viewportBias, placesNearViewRecovery } from './annotations/annotationResolver.js';
 
 /**
@@ -126,29 +127,74 @@ export const CITY_POIS = {
  * and under the fly_to_location rangeM ceiling (20,000 km).
  */
 export const GLOBE_VIEW = Object.freeze({
+  latitudeDeg: 0,
+  longitudeDeg: 0,
   heightM: 18000000,
+  headingDeg: 0,
   pitchDeg: -90,
+  rollDeg: 0,
   durationS: 2.8,
+  twoDimensionalHeightM: 40075000,
 });
 
+export function globeViewHeightM(viewer) {
+  if (viewer?.scene?.mode === Cesium.SceneMode.SCENE2D) {
+    return GLOBE_VIEW.twoDimensionalHeightM;
+  }
+  const width = Number(viewer?.scene?.canvas?.clientWidth);
+  const height = Number(viewer?.scene?.canvas?.clientHeight);
+  const aspect = width > 0 && height > 0 ? width / height : 1;
+  return Math.round(GLOBE_VIEW.heightM / Math.min(1, Math.max(0.35, aspect)));
+}
+
+export function setDefaultGlobeView(viewer) {
+  if (!viewer?.camera) return null;
+  const heightM = globeViewHeightM(viewer);
+  viewer.camera.cancelFlight?.();
+  viewer.camera.lookAtTransform?.(Cesium.Matrix4.IDENTITY);
+  viewer.camera.setView({
+    destination: Cesium.Cartesian3.fromDegrees(
+      GLOBE_VIEW.longitudeDeg,
+      GLOBE_VIEW.latitudeDeg,
+      heightM,
+    ),
+    orientation: {
+      heading: Cesium.Math.toRadians(GLOBE_VIEW.headingDeg),
+      pitch: Cesium.Math.toRadians(GLOBE_VIEW.pitchDeg),
+      roll: Cesium.Math.toRadians(GLOBE_VIEW.rollDeg),
+    },
+  });
+  setCameraHomeActive(viewer, true);
+  viewer.scene?.requestRender?.();
+  return {
+    latitude: GLOBE_VIEW.latitudeDeg,
+    longitude: GLOBE_VIEW.longitudeDeg,
+    heightM,
+  };
+}
+
 /**
- * Fly straight out to the full-earth globe view, keeping the current sub-camera
- * point centered so the user's continent stays in front of them.
+ * Fly to the canonical neutral full-earth frame.
  * @param {Cesium.Viewer} viewer
  * @param {{duration?: number, onComplete?: Function, onCancel?: Function}} options
  * @returns {{latitude: number, longitude: number, heightM: number}}
  */
 export function flyToGlobeView(viewer, options = {}) {
-  const carto = viewer.camera.positionCartographic;
-  const longitude = Cesium.Math.toDegrees(carto.longitude);
-  const latitude = Cesium.Math.toDegrees(carto.latitude);
+  const longitude = Number.isFinite(options.longitude)
+    ? options.longitude
+    : GLOBE_VIEW.longitudeDeg;
+  const latitude = Number.isFinite(options.latitude)
+    ? options.latitude
+    : GLOBE_VIEW.latitudeDeg;
+  const heightM = globeViewHeightM(viewer);
+  setCameraHomeActive(viewer, false);
   viewer.camera.cancelFlight();
   viewer.camera.flyTo({
-    destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, GLOBE_VIEW.heightM),
+    destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, heightM),
     orientation: {
-      heading: 0,
+      heading: Cesium.Math.toRadians(GLOBE_VIEW.headingDeg),
       pitch: Cesium.Math.toRadians(GLOBE_VIEW.pitchDeg),
-      roll: 0,
+      roll: Cesium.Math.toRadians(GLOBE_VIEW.rollDeg),
     },
     duration: finitePositive(options.duration) || GLOBE_VIEW.durationS,
     endTransform: Cesium.Matrix4.IDENTITY,
@@ -156,10 +202,16 @@ export function flyToGlobeView(viewer, options = {}) {
     // are this module's OWN option names and are silently ignored by Cesium —
     // spelling them through to flyTo meant the reset never resolved on the
     // flight's own events and every caller fell back to its watchdog timeout.
-    complete: options.onComplete,
-    cancel: options.onCancel,
+    complete: () => {
+      setCameraHomeActive(viewer, true);
+      options.onComplete?.();
+    },
+    cancel: () => {
+      setCameraHomeActive(viewer, false);
+      options.onCancel?.();
+    },
   });
-  return { latitude, longitude, heightM: GLOBE_VIEW.heightM };
+  return { latitude, longitude, heightM };
 }
 
 /**

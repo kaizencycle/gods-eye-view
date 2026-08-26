@@ -6,6 +6,12 @@ import {
 } from './data/detectionPolicy.js';
 import { clampScopeTerminusPct } from './scopeMask.js';
 import { decodeLayerStateParams, encodeLayerStateParams } from './data/layerState.js';
+import {
+  adaptCameraSessionForViewer,
+  captureCameraState,
+  normalizeCameraSession,
+} from './cameraState.js';
+import { setCameraHomeActive } from './cameraHomeState.js';
 
 /**
  * Share Links — URL Hash State Management
@@ -156,18 +162,33 @@ export class ShareLinkManager {
     if (!hash) return null;
 
     const params = new URLSearchParams(hash);
-    const lat = parseFloat(params.get('lat'));
-    const lon = parseFloat(params.get('lon'));
+    const strictNumber = (value) => {
+      if (typeof value !== 'string' || value.trim() === '') return null;
+      const number = Number(value);
+      return Number.isFinite(number) ? number : null;
+    };
+    const lat = strictNumber(params.get('lat'));
+    const lon = strictNumber(params.get('lon'));
 
-    // Coordinates drive Cartesian conversion, so reject non-finite URL values
-    // before marking a share restoration as pending. `parseFloat('Infinity')`
-    // is not NaN and would otherwise reach Cesium asynchronously at startup.
+    // Coordinates drive Cartesian conversion, so reject malformed/non-finite
+    // URL values before marking a share restoration as pending.
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
 
     const parseOr = (value, fallback) => {
-      const num = parseFloat(value);
-      return Number.isFinite(num) ? num : fallback;
+      const number = strictNumber(value);
+      return number === null ? fallback : number;
     };
+    const camera = normalizeCameraSession({
+      version: 1,
+      latitude: lat,
+      longitude: lon,
+      heightM: parseOr(params.get('alt'), 800),
+      headingDeg: parseOr(params.get('heading'), 0),
+      pitchDeg: parseOr(params.get('pitch'), -35),
+      rollDeg: parseOr(params.get('roll'), 0),
+      home: params.get('home') === '1',
+    });
+    if (!camera) return null;
 
     const restoredDetection = migrateDetectionState(
       params.get('dm') || 'OFF',
@@ -177,12 +198,13 @@ export class ShareLinkManager {
     const style = URL_TO_STYLE[params.get('style')] || 'normal';
     const decodedLayerState = decodeLayerStateParams(params);
     const state = {
-      lat,
-      lon,
-      alt: parseOr(params.get('alt'), 800),
-      heading: parseOr(params.get('heading'), 0),
-      pitch: parseOr(params.get('pitch'), -35),
-      roll: parseOr(params.get('roll'), 0),
+      lat: camera.latitude,
+      lon: camera.longitude,
+      alt: camera.heightM,
+      heading: camera.headingDeg,
+      pitch: camera.pitchDeg,
+      roll: camera.rollDeg,
+      home: camera.home === true,
       style,
       styleParams: decodeStyleParamState(params, style),
       bloom: params.get('bloom') === '1',
@@ -248,12 +270,27 @@ export class ShareLinkManager {
    */
   async applyState(state, { applyCamera = true, navigationToken = null } = {}) {
     if (this._destroyed || !state) return { succeeded: false, reason: 'unavailable' };
+    const adaptedCamera = adaptCameraSessionForViewer(this.viewer, {
+      version: 1,
+      latitude: state.lat,
+      longitude: state.lon,
+      heightM: state.alt,
+      headingDeg: state.heading,
+      pitchDeg: state.pitch,
+      rollDeg: state.roll,
+      home: state.home === true,
+    });
+    if (!adaptedCamera) return { succeeded: false, reason: 'invalid-camera' };
     const view = {
-      destination: Cesium.Cartesian3.fromDegrees(state.lon, state.lat, state.alt),
+      destination: Cesium.Cartesian3.fromDegrees(
+        adaptedCamera.longitude,
+        adaptedCamera.latitude,
+        adaptedCamera.heightM,
+      ),
       orientation: {
-        heading: Cesium.Math.toRadians(state.heading),
-        pitch: Cesium.Math.toRadians(state.pitch),
-        roll: Cesium.Math.toRadians(state.roll),
+        heading: Cesium.Math.toRadians(adaptedCamera.headingDeg),
+        pitch: Cesium.Math.toRadians(adaptedCamera.pitchDeg),
+        roll: Cesium.Math.toRadians(adaptedCamera.rollDeg),
       },
     };
     let cameraPromise = Promise.resolve({ status: applyCamera ? 'superseded' : 'skipped' });
@@ -284,6 +321,7 @@ export class ShareLinkManager {
             return;
           }
           this.viewer.camera.setView(view);
+          setCameraHomeActive(this.viewer, adaptedCamera.home === true);
           this.viewer.scene?.requestRender?.();
           releaseOwnedFlight('applied');
         },
@@ -485,6 +523,7 @@ export class ShareLinkManager {
     params.set('heading', Math.round(Cesium.Math.toDegrees(camera.heading)).toString());
     params.set('pitch', Math.round(Cesium.Math.toDegrees(camera.pitch)).toString());
     params.set('roll', Math.round(Cesium.Math.toDegrees(camera.roll)).toString());
+    if (captureCameraState(this.viewer)?.home === true) params.set('home', '1');
     params.set('style', STYLE_TO_URL[this._currentStyle] || 'normal');
     params.set('bloom', this._bloomEnabled ? '1' : '0');
     params.set('sharpen', this._sharpenEnabled ? '1' : '0');

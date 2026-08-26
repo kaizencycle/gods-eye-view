@@ -13,6 +13,7 @@ import {
   PLACE_VIEWPORT_MAX_SPAN_KM,
   PLACE_ANCHOR_OFFSET_RATIO,
   flyToGlobeView,
+  globeViewHeightM,
   flyToPresetLocation,
   geocodeNavigationMode,
   regionFramingPlan,
@@ -20,6 +21,7 @@ import {
   GLOBE_VIEW,
   searchAndFlyTo,
 } from './locations.js';
+import { isCameraHomeActive } from './cameraHomeState.js';
 
 function stubViewer() {
   const flights = [];
@@ -483,6 +485,19 @@ test('GLOBE_VIEW preset height sits in the global view band', () => {
   assert.ok(GLOBE_VIEW.heightM <= 20000000, `must stay under the 20,000 km ceiling, got ${GLOBE_VIEW.heightM}`);
   // Straight-down framing so the planet reads as a globe, not a horizon shot.
   assert.equal(GLOBE_VIEW.pitchDeg, -90);
+  assert.equal(GLOBE_VIEW.latitudeDeg, 0);
+  assert.equal(GLOBE_VIEW.longitudeDeg, 0);
+});
+
+test('global view height expands for portrait and Cesium 2D framing', () => {
+  const portrait = stubViewer();
+  portrait.scene.canvas = { clientWidth: 390, clientHeight: 844 };
+  assert.ok(globeViewHeightM(portrait) > 30000000);
+
+  const twoDimensional = stubViewer();
+  twoDimensional.scene.mode = Cesium.SceneMode.SCENE2D;
+  twoDimensional.scene.canvas = { clientWidth: 1024, clientHeight: 768 };
+  assert.equal(globeViewHeightM(twoDimensional), GLOBE_VIEW.twoDimensionalHeightM);
 });
 
 // The globe flight's callbacks are what resolves Reset Globe / zoom_to_globe.
@@ -510,13 +525,19 @@ test('the globe flight publishes its callbacks under Cesium\'s own option names'
   assert.deepEqual(fired, ['complete', 'cancel'], 'each hook reaches the caller it belongs to');
 });
 
-test('a globe flight without callbacks still flies (both hooks are optional)', () => {
+test('a globe flight without caller callbacks still records semantic Home on completion', () => {
   const viewer = stubViewer();
   const target = flyToGlobeView(viewer);
   assert.equal(viewer.flights.length, 1);
   assert.equal(target.heightM, GLOBE_VIEW.heightM);
-  assert.equal(viewer.flights[0].complete, undefined);
-  assert.equal(viewer.flights[0].cancel, undefined);
+  const cartographic = Cesium.Cartographic.fromCartesian(viewer.flights[0].destination);
+  assert.ok(Math.abs(Cesium.Math.toDegrees(cartographic.latitude)) < 1e-9);
+  assert.ok(Math.abs(Cesium.Math.toDegrees(cartographic.longitude)) < 1e-9);
+  assert.equal(typeof viewer.flights[0].complete, 'function');
+  assert.equal(typeof viewer.flights[0].cancel, 'function');
+  assert.equal(isCameraHomeActive(viewer), false);
+  viewer.flights[0].complete();
+  assert.equal(isCameraHomeActive(viewer), true);
 });
 
 test('geocoded Location branches forward the resolved-navigation ownership hook', () => {

@@ -1,8 +1,7 @@
 import * as Cesium from 'cesium';
 
 /**
- * Camera presets for notable locations.
- * Phase 1 default: fly to Austin, TX on load.
+ * Camera presets for explicit notable-location navigation.
  */
 export const CAMERA_PRESETS = {
   austin: {
@@ -47,7 +46,7 @@ export function flyToPreset(viewer, presetName, duration = 3.0) {
 }
 
 /**
- * Set camera to Austin on load with a cinematic fly-in.
+ * Fly to Austin with a cinematic city-level transition.
  */
 export function flyToAustin(viewer) {
   // Start from a high altitude, then fly down

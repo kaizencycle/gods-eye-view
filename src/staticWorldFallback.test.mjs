@@ -8,13 +8,14 @@ import { staticFallbackMapUrl } from './staticWorldFallback.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-test('static fallback uses attributed OpenStreetMap embed centered on Austin', () => {
+test('static fallback uses an attributed global OpenStreetMap embed', () => {
   const url = new URL(staticFallbackMapUrl());
 
   assert.equal(url.origin, 'https://www.openstreetmap.org');
   assert.equal(url.pathname, '/export/embed.html');
   assert.equal(url.searchParams.get('layer'), 'mapnik');
-  assert.equal(url.searchParams.get('marker'), '30.2672,-97.7431');
+  assert.equal(url.searchParams.get('bbox'), '-180,-80,180,80');
+  assert.equal(url.searchParams.has('marker'), false);
 });
 
 test('static fallback never claims Cesium event layers are live', async () => {

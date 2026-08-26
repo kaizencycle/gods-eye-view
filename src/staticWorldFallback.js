@@ -1,11 +1,9 @@
-const AUSTIN_BOUNDS = '-97.86,30.20,-97.66,30.36';
-const AUSTIN_MARKER = '30.2672,-97.7431';
+const GLOBAL_BOUNDS = '-180,-80,180,80';
 
 export function staticFallbackMapUrl() {
   const params = new URLSearchParams({
-    bbox: AUSTIN_BOUNDS,
+    bbox: GLOBAL_BOUNDS,
     layer: 'mapnik',
-    marker: AUSTIN_MARKER,
   });
   return `https://www.openstreetmap.org/export/embed.html?${params}`;
 }
@@ -51,7 +49,7 @@ export function bootStaticWorldFallback({
 
   const iframe = element('iframe', 'static-world-map');
   iframe.src = staticFallbackMapUrl();
-  iframe.title = 'OpenStreetMap centered on Austin, Texas';
+  iframe.title = 'Global OpenStreetMap view';
   iframe.loading = 'eager';
   iframe.referrerPolicy = 'strict-origin-when-cross-origin';
   iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-popups');
