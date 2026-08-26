@@ -944,7 +944,7 @@ test('both layers gate the tracked-model load and record its failures', async ()
   }
 });
 
-test('the tracked regime never consults the fleet models3d toggle', async () => {
+test('tracked models ignore the operator fleet toggle but obey renderer capability', async () => {
   const { readFile } = await import('node:fs/promises');
   for (const name of ['flights.js', 'militaryFlights.js']) {
     const source = await readFile(new URL(`./${name}`, import.meta.url), 'utf8');
@@ -952,11 +952,13 @@ test('the tracked regime never consults the fleet models3d toggle', async () => 
     assert.ok(regime, `${name}: _trackedModelRegimeActive is defined`);
     assert.doesNotMatch(regime, /_models3dEnabled|_modelRegimeActive\(\)/,
       `${name}: the tracked contact's handoff is default-on, not gated on the fleet toggle`);
+    assert.match(regime, /_rendererModelsAllowed/,
+      `${name}: renderer capability can suppress every tracked GLB`);
     assert.match(regime, /trackedModelZoomActive\(/,
       `${name}: the tracked contact uses the shared hysteretic zoom policy`);
     // The FLEET must still obey the toggle — the budget decision stays the operator's.
     const fleet = /function _modelRegimeActive\(\) \{[\s\S]*?\n\}/.exec(source)?.[0];
-    assert.match(fleet, /if \(!_models3dEnabled\) return false;/,
-      `${name}: the fleet regime still obeys the DISPLAY-rail 3D toggle`);
+    assert.match(fleet, /if \(!_rendererModelsAllowed \|\| !_models3dEnabled\) return false;/,
+      `${name}: fleet models require renderer capability and the DISPLAY-rail toggle`);
   }
 });

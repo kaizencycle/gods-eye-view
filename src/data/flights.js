@@ -252,6 +252,7 @@ let _modelEpoch = 0;
  *  `layerState.js` and `this._models3dEnabled` in ui.js, or the DISPLAY rail would
  *  light a button the layer has not armed. */
 let _models3dEnabled = true;
+let _rendererModelsAllowed = true;
 let _models3dMode = 'proximity'; // 'proximity' = nearest MODEL_MAX in view; 'all' = every in-view plane (≤ MODEL_MAX_ALL)
 let _lastModelCapWarnMs = 0; // throttle the "more planes in view than the cap" console notice
 // The tracked entity's billboard goes transparent (rather than hidden) once the model takes
@@ -1509,7 +1510,7 @@ function _modelColor(icao24) {
  *  and it takes its own default-on, hysteretic zoom regime
  *  (`_trackedModelRegimeActive`). */
 function _modelRegimeActive() {
-  if (!_models3dEnabled) return false;
+  if (!_rendererModelsAllowed || !_models3dEnabled) return false;
   const h = _viewer?.camera?.positionCartographic?.height ?? Infinity;
   return h < MODEL_ALT_CEIL_M;
 }
@@ -1604,7 +1605,7 @@ function _trackedModelRegimeActive() {
   // A converted TR-3B has no 3D asset — suppressing the regime keeps its
   // tracked billboard fully opaque (the colour callback reads this too), so
   // the triangle stays the visual all the way in.
-  if (!_trackedIcao || _cockpitContactMode || isTr3b(_trackedIcao)) {
+  if (!_rendererModelsAllowed || !_trackedIcao || _cockpitContactMode || isTr3b(_trackedIcao)) {
     _trackedZoomLatched = false;
     return false;
   }
@@ -3913,7 +3914,7 @@ const flightsLayer = {
     // Warm the glTF cache so the tracked plane's model instantiates instantly when first needed
     // (keeps the retained instance referenced; never rendered). Captured against this epoch so a
     // destroy/re-init mid-load doesn't flip the flag for a torn-down lifecycle.
-    if (!_preloadModel) {
+    if (_rendererModelsAllowed && !_preloadModel) {
       const epoch = _modelEpoch;
       Cesium.Model.fromGltfAsync({ url: PLANE_MODEL_URL, asynchronous: false })
         .then((m) => {
@@ -4726,12 +4727,28 @@ const flightsLayer = {
    * The TRACKED contact is NOT gated by this — it takes its 3D model by camera distance
    * regardless (see `_trackedModelRegimeActive` / trackedModelRegime.js).
    * `models3dMode` is 'proximity' (nearest MODEL_MAX in view) or 'all' (every in-view plane).
-   * @param {{models3d?: boolean, models3dMode?: 'proximity'|'all', selectedFlightsTrackingId?: string|null}} params
+   * @param {{models3d?: boolean, rendererModelsAllowed?: boolean,
+   *   models3dMode?: 'proximity'|'all', selectedFlightsTrackingId?: string|null}} params
    */
   setParams(params = {}, { origin = 'programmatic' } = {}) {
     if (isExplicitLayerStateOrigin(origin)
         && !Object.hasOwn(params, 'selectedFlightsTrackingId')) {
       _cancelPendingTrackingRestore();
+    }
+    if (typeof params.rendererModelsAllowed === 'boolean'
+        && params.rendererModelsAllowed !== _rendererModelsAllowed) {
+      _rendererModelsAllowed = params.rendererModelsAllowed;
+      if (!_rendererModelsAllowed) {
+        _modelEpoch++;
+        _releaseModels();
+        _releaseTrackedModel();
+        if (_preloadModel) {
+          try { _preloadModel.destroy(); } catch { /* gone */ }
+          _preloadModel = null;
+        }
+        _planeModelLoaded = false;
+        _syncTracked2dRotation();
+      }
     }
     if (typeof params.models3d === 'boolean' && params.models3d !== _models3dEnabled) {
       _models3dEnabled = params.models3d;
@@ -4779,6 +4796,7 @@ const flightsLayer = {
   getParams() {
     return {
       models3d: _models3dEnabled,
+      rendererModelsAllowed: _rendererModelsAllowed,
       models3dMode: _models3dMode,
       irBoost: _irBoost,
       selectedFlightsTrackingId: _trackedIcao,

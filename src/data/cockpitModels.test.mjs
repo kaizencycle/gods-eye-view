@@ -39,8 +39,8 @@ for (const layer of LAYERS) {
   test(`${layer.name}: Cockpit 3D obeys the shared Display toggle`, () => {
     const regime = /function _modelRegimeActive\(\) \{[\s\S]*?\n\}/.exec(source)?.[0];
     assert.ok(regime, '_modelRegimeActive is defined');
-    assert.match(regime, /if \(!_models3dEnabled\) return false;/,
-      'OFF must keep Cockpit AIR contacts in 2D');
+    assert.match(regime, /if \(!_rendererModelsAllowed \|\| !_models3dEnabled\) return false;/,
+      'renderer capability and Display OFF must keep Cockpit AIR contacts in 2D');
     assert.doesNotMatch(regime, /!_models3dEnabled\s*&&\s*!_cockpitContactMode/,
       'Cockpit must not bypass the user-visible Display toggle');
   });
@@ -53,7 +53,7 @@ for (const layer of LAYERS) {
     // suppression is now an explicit early return.
     const regime = /function _trackedModelRegimeActive\(\) \{[\s\S]*?\n\}/.exec(source)?.[0];
     assert.ok(regime, '_trackedModelRegimeActive is defined');
-    assert.match(regime, /if \(!_trackedIcao \|\| _cockpitContactMode \|\|[\s\S]*?return false;/,
+    assert.match(regime, /if \(!_rendererModelsAllowed \|\| !_trackedIcao \|\| _cockpitContactMode \|\|[\s\S]*?return false;/,
       '_trackedModelRegimeActive excludes cockpit');
     const tracked = /function _updateTrackedModel\(\)[\s\S]*?\n  if \(!active\)/.exec(source)?.[0];
     assert.ok(tracked, '_updateTrackedModel is defined');
