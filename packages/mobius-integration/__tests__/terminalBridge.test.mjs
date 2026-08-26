@@ -96,6 +96,28 @@ test('initialize fetches a snapshot and publishes degraded connection state', as
   assert.equal(publications.at(-1).state.gi.score, 0.81);
 });
 
+test('browser-native callables are never invoked with the bridge as receiver', async () => {
+  function strictFetch() {
+    assert.equal(this, undefined);
+    return response(SNAPSHOT);
+  }
+  function strictSetTimer() {
+    assert.equal(this, undefined);
+    return 1;
+  }
+  function strictClearTimer() {
+    assert.equal(this, undefined);
+  }
+  const bridge = new TerminalBridge({
+    liveUpdates: false,
+    fetchFn: strictFetch,
+    setTimer: strictSetTimer,
+    clearTimer: strictClearTimer,
+  });
+
+  assert.equal(await bridge.initialize(), true);
+});
+
 test('failed polling retains the last accepted snapshot', async () => {
   let shouldFail = false;
   const bridge = new TerminalBridge({

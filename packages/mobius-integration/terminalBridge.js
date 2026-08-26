@@ -226,9 +226,12 @@ export class TerminalBridge {
     this.requestTimeoutMs = Math.max(1_000, Number(requestTimeoutMs) || DEFAULT_TIMEOUT_MS);
     this.liveUpdates = liveUpdates === true;
     this.verifyEndpoint = normalizeVerifyEndpoint(verifyEndpoint);
-    this.fetchFn = fetchFn;
-    this.setTimer = setTimer;
-    this.clearTimer = clearTimer;
+    // Keep browser-native callables detached from this TerminalBridge instance.
+    // Calling a stored `window.fetch` as `this.fetchFn()` supplies the bridge as
+    // its receiver and Chromium rejects it with "Illegal invocation".
+    this.fetchFn = (...args) => fetchFn(...args);
+    this.setTimer = (...args) => setTimer(...args);
+    this.clearTimer = (...args) => clearTimer(...args);
     this.now = now;
     this.listeners = new Set();
     this.state = null;
