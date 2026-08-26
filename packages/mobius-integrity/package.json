@@ -1,0 +1,22 @@
+{
+  "name": "@mobius/mobius-integrity",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Standalone EPICON packet and local replay prototype",
+  "license": "MIT",
+  "exports": {
+    ".": "./index.js",
+    "./hashing": "./hashing/computeFingerprint.js",
+    "./packet": "./packet/createPacket.js",
+    "./replay": "./packet/replayPacket.js",
+    "./schema": "./schema/validation.js",
+    "./store": "./replay/localPacketStore.js"
+  },
+  "scripts": {
+    "test": "node --test __tests__/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=24.14.0 <25 || >=26 <27"
+  }
+}
