@@ -23,6 +23,8 @@ import { MapStackController } from './mapStackController.js';
 import { initAnnotations } from './annotations/index.js';
 import { initLogoGaze } from './logoGaze.js';
 import { initCockpitCloudEffects } from './cockpitCloudEffects.js';
+import { registerPickOwner, unregisterPickOwner } from './data/pickRegistry.js';
+import { attachMobiusAdapter } from '../packages/mobius-integrity/index.js';
 import {
   installRenderGovernor,
   getRenderGovernorDiagnostics,
@@ -240,6 +242,21 @@ async function init() {
       };
     }
     dataManager.buildTogglePanel(document.getElementById('data-toggles'));
+    const mobiusAdapter = attachMobiusAdapter({
+      viewer,
+      dataManager,
+      source: {
+        name: 'USGS',
+        getRecords: () => earthquakesLayer.getAnalystRecords(),
+      },
+      createClickHandler: (canvas) => new Cesium.ScreenSpaceEventHandler(canvas),
+      leftClickEventType: Cesium.ScreenSpaceEventType.LEFT_CLICK,
+      registerPickOwnership: (predicate) => {
+        const ownerId = 'mobius-earthquakes';
+        registerPickOwner(ownerId, predicate);
+        return () => unregisterPickOwner(ownerId);
+      },
+    });
     styleManager.attachDataManager(dataManager);
 
     // Initialize deterministic scene playback for social clip capture
@@ -319,6 +336,7 @@ async function init() {
       sceneDirector,
       mapStackController,
       annotations,
+      mobiusAdapter,
       weatherEffects,
       cockpitCloudEffects,
       getRenderGovernorDiagnostics,
