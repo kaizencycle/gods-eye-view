@@ -1,8 +1,11 @@
 # God's Eye View × Mobius Integrity Layer
 
-**Cycle:** C-411  
-**Status:** Phase 1 — architecture and integration analysis only  
-**Reviewed revision:** `880a672b5e16`  
+**Cycle:** C-411
+
+**Status:** Phase 1 — architecture and integration analysis only
+
+**Reviewed revision:** `880a672b5e16`
+
 **Implementation status:** No Mobius runtime code, packet store, or replay code is included in this phase.
 
 ## Purpose
