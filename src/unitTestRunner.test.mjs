@@ -1,13 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import {
   ALLOCATION_TEST_FILES,
   allocationTestArgs,
   assertNode24AllocationRuntime,
   buildUnitTestPlan,
+  discoverUnitTestFiles,
   isCalibratedAllocationRuntime,
 } from '../scripts/run-unit-tests.mjs';
+
+test('unit discovery includes package-level integration suites', () => {
+  const root = fileURLToPath(new URL('..', import.meta.url));
+  const files = discoverUnitTestFiles(root);
+
+  assert.ok(files.includes('packages/mobius-integrity/__tests__/packet.test.mjs'));
+  assert.ok(files.includes('packages/mobius-integration/__tests__/terminalBridge.test.mjs'));
+});
 
 test('unit runner serializes only GC-bracketed allocation microbenchmarks', () => {
   const ordinary = [

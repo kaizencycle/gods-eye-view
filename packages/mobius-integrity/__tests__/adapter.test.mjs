@@ -194,6 +194,24 @@ test('developer replay binds a packet to its requested storage key', async () =>
   assert.match(replay.errors.join(' '), /storage-key validation/i);
 });
 
+test('packet subscribers receive a detached packet after local persistence', async () => {
+  const fixture = createAdapterFixture();
+  const packets = [];
+  const unsubscribe = fixture.adapter.subscribePackets((packet) => {
+    packets.push(packet);
+    packet.source = 'mutated-listener-copy';
+  });
+  emitSuccessfulEnable(fixture.manager);
+
+  fixture.clicks.click();
+  await fixture.adapter.whenIdle();
+  unsubscribe();
+
+  const [packetId] = fixture.adapter.listPacketIds();
+  assert.equal(packets.length, 1);
+  assert.equal((await fixture.adapter.readPacket(packetId)).source, 'USGS');
+});
+
 test('failed refresh cannot promote a partial displayed record', async () => {
   const fixture = createAdapterFixture();
   emitSuccessfulEnable(fixture.manager);

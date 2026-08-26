@@ -116,9 +116,23 @@ export function attachMobiusAdapter({
 
   const packetStore = createLocalPacketStore(storage);
   const acceptedRecords = new Map();
+  const packetListeners = new Set();
   let enableTransitionPending = false;
   let disposed = false;
   let pendingCapture = Promise.resolve(null);
+
+  const notifyPacketListeners = (packet) => {
+    for (const listener of packetListeners) {
+      try {
+        const result = listener(structuredClone(packet));
+        Promise.resolve(result).catch((error) => {
+          logger.warn?.(`[EPICON] Packet listener failed: ${error.message}`);
+        });
+      } catch (error) {
+        logger.warn?.(`[EPICON] Packet listener failed: ${error.message}`);
+      }
+    }
+  };
 
   const readCurrentRecords = () => {
     const records = source.getRecords();
@@ -214,6 +228,7 @@ export function attachMobiusAdapter({
       source.name || 'USGS',
     ));
     await packetStore.save(packet);
+    notifyPacketListeners(packet);
     logger.info?.(`[EPICON] Saved packet ${packet.packet_id}`);
     return packet;
   };
@@ -238,6 +253,11 @@ export function attachMobiusAdapter({
     listPacketIds: () => packetStore.listPacketIds(),
     readPacket: (packetId) => packetStore.read(packetId),
     readPacketJson: (packetId) => packetStore.readJson(packetId),
+    subscribePackets(listener) {
+      if (typeof listener !== 'function') return () => {};
+      packetListeners.add(listener);
+      return () => packetListeners.delete(listener);
+    },
     async replay(packetId) {
       const packet = await packetStore.read(packetId);
       if (!packet) {
@@ -254,6 +274,7 @@ export function attachMobiusAdapter({
       if (disposed) return;
       disposed = true;
       acceptedRecords.clear();
+      packetListeners.clear();
       enableTransitionPending = false;
       unsubscribe?.();
       releasePickOwnership?.();

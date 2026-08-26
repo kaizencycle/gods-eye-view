@@ -39,6 +39,7 @@
     "preview": "vite preview",
     "test": "node scripts/run-unit-tests.mjs",
     "test:epicon": "npm test --prefix packages/mobius-integrity",
+    "test:terminal": "npm test --prefix packages/mobius-integration",
     "test:track": "node scripts/track-regression.mjs",
     "qa:map-source-tray": "node scripts/qa-map-source-tray.mjs"
   },
