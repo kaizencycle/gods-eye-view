@@ -74,6 +74,23 @@ import { bootStaticWorldFallback } from './staticWorldFallback.js';
 initLogoGaze();
 
 /**
+ * Append a `<link>` resource hint to `<head>`, once per href. Runtime-gated
+ * hints (added only once the credential that makes the host reachable is
+ * known) rather than static markup, so a deployment without that credential
+ * never asks the browser to warm a connection it will never use.
+ * @param {'preconnect'|'dns-prefetch'} rel
+ * @param {string} href
+ */
+function addResourceHint(rel, href) {
+  if (document.head.querySelector(`link[rel="${rel}"][href="${href}"]`)) return;
+  const link = document.createElement('link');
+  link.rel = rel;
+  link.href = href;
+  if (rel === 'preconnect') link.crossOrigin = 'anonymous';
+  document.head.appendChild(link);
+}
+
+/**
  * Extract a human-readable error message from any thrown value.
  * Handles Error objects, strings, and plain objects with message/error fields.
  * @param {*} error — caught exception value
@@ -133,6 +150,14 @@ async function init() {
     const cesiumToken = import.meta.env.CESIUM_ION_TOKEN;
     if (cesiumToken) {
       Cesium.Ion.defaultAccessToken = cesiumToken;
+      // World Terrain is fetched from ion on every session once a token is
+      // configured (MapStackController._setWorldTerrainEnabled), regardless
+      // of which imagery stack is active — warm that connection now instead
+      // of paying DNS/TLS setup serially on the first terrain request. Never
+      // added without a token: without one, ion is never contacted at all,
+      // and an unconditional hint would just burn a connection slot.
+      addResourceHint('preconnect', 'https://api.cesium.com');
+      addResourceHint('preconnect', 'https://assets.ion.cesium.com');
     }
 
     const rendererCapabilities = probeRendererCapabilities();
@@ -149,6 +174,9 @@ async function init() {
     if (googleApiKey) {
       Cesium.GoogleMaps.defaultApiKey = googleApiKey;
       window.__GOOGLE_MAPS_API_KEY__ = googleApiKey;
+      // Geocoding (voice + search) hits this host directly, but only on
+      // demand and only once a key exists to call it with.
+      addResourceHint('dns-prefetch', 'https://maps.googleapis.com');
     }
     recordRendererAttempt({
       profile: rendererProfile.id,
