@@ -54,12 +54,14 @@ export class MapStackController {
     googleTileset = null,
     cesiumToken = '',
     initialStack = 'photoreal',
+    allowTerrain = true,
     onChange = null,
     onError = null,
   } = {}) {
     this.viewer = viewer;
     this.googleTileset = googleTileset;
     this.cesiumToken = String(cesiumToken || '').trim();
+    this.allowTerrain = allowTerrain !== false;
     this._onChange = onChange;
     this._onError = onError;
     this._activeId = googleTileset ? initialStack : 'osm';
@@ -295,6 +297,12 @@ export class MapStackController {
    * @param {number} [gen] — switch generation this call belongs to
    */
   async _setWorldTerrainEnabled(enabled, gen) {
+    if (!this.allowTerrain) {
+      if (this._terrainMode === 'flat') return;
+      this.viewer.terrainProvider = new Cesium.EllipsoidTerrainProvider();
+      this._terrainMode = 'flat';
+      return;
+    }
     const targetMode = enabled ? 'world' : 'keyless';
     if (targetMode === this._terrainMode) return;
     if (enabled) {

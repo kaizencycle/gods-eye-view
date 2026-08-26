@@ -8990,7 +8990,7 @@ export class StyleManager {
 
   /**
    * Apply renderer compatibility limits to every post-processing entry point.
-   * Mobile/safe profiles keep the optical Normal style and reject later
+   * Mobile/minimal profiles keep the optical Normal style and reject later
    * preset, voice, share-link, and cockpit attempts to re-enable GPU stages.
    */
   applyRendererProfile(profile) {
@@ -9031,6 +9031,19 @@ export class StyleManager {
       if (!button) continue;
       button.disabled = !allowed;
       button.setAttribute('aria-disabled', String(!allowed));
+    }
+    const models3dAvailable = profile.sceneMode === '3d';
+    if (!models3dAvailable) this._models3dEnabled = false;
+    if (this._models3dBtn) {
+      this._models3dBtn.disabled = !models3dAvailable;
+      this._models3dBtn.classList.toggle('active', models3dAvailable && this._models3dEnabled);
+      this._models3dBtn.setAttribute('aria-disabled', String(!models3dAvailable));
+      this._models3dBtn.setAttribute('aria-pressed', String(
+        models3dAvailable && this._models3dEnabled,
+      ));
+    }
+    if (this._models3dModeRow && !models3dAvailable) {
+      this._models3dModeRow.classList.remove('visible');
     }
     this.viewer.scene.requestRender?.();
   }
@@ -9316,6 +9329,15 @@ export class StyleManager {
    */
   _initLocationBar() {
     const QWERTY_KEYS = ['Q', 'W', 'E', 'R', 'T'];
+    const searchAvailable = Boolean(window.__GOOGLE_MAPS_API_KEY__);
+    if (!searchAvailable) {
+      this._locationSearch.disabled = true;
+      this._locationSearch.placeholder = 'Search requires a Google Maps key';
+      this._locationSearch.setAttribute('aria-label', 'Location search unavailable without Google Maps key');
+      this._searchToggle.disabled = true;
+      this._searchToggle.title = 'Location search unavailable without Google Maps key';
+      this._searchToggle.setAttribute('aria-disabled', 'true');
+    }
 
     // Render city pills (no submenu wrappers — POI row is separate)
     for (const [cityId, city] of Object.entries(CITY_POIS)) {
@@ -9874,10 +9896,14 @@ export class StyleManager {
   _syncModels3dFromLayerState(state) {
     const options = state?.options?.flights;
     if (!options) return;
-    this._models3dEnabled = options.models3d === true;
+    const rendererAllowsModels = this.rendererProfile?.sceneMode === '3d';
+    this._models3dEnabled = rendererAllowsModels && options.models3d === true;
     this._models3dMode = options.models3dMode === 'all' ? 'all' : 'proximity';
     this._syncModels3dButtonState();
-    this._models3dModeRow?.classList.toggle('visible', this._models3dEnabled);
+    this._models3dModeRow?.classList.toggle(
+      'visible',
+      rendererAllowsModels && this._models3dEnabled,
+    );
     for (const button of this._models3dModeBtns || []) {
       if (!button) continue;
       const active = button.dataset.mode === this._models3dMode;
@@ -9891,7 +9917,12 @@ export class StyleManager {
     if (!this._models3dBtn) return;
     // The Proximity/All mode row is revealed only while 3D is on (mirrors the DETECT slider row).
     const syncModeRow = () => {
-      if (this._models3dModeRow) this._models3dModeRow.classList.toggle('visible', this._models3dEnabled);
+      if (this._models3dModeRow) {
+        this._models3dModeRow.classList.toggle(
+          'visible',
+          this.rendererProfile?.sceneMode === '3d' && this._models3dEnabled,
+        );
+      }
       this._layoutRightPanels();
     };
     this._models3dBtn.addEventListener('click', () => {

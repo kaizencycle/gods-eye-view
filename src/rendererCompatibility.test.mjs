@@ -4,11 +4,18 @@ import { test } from 'node:test';
 import {
   applyRendererProfile,
   createRendererRecovery,
+  isRendererStartupError,
+  nextRendererProfile,
   probeRendererCapabilities,
+  readRendererNegotiationHistory,
+  recordRendererAttempt,
+  rendererDiagnostics,
   rendererFallbackUrl,
   rendererFogEnabled,
+  rendererProfileForMapKey,
   rendererRequiresRecreation,
   rendererViewerOptions,
+  RENDERER_PROFILES,
   selectRendererProfile,
 } from './rendererCompatibility.js';
 
@@ -24,6 +31,8 @@ function fullCapabilities(overrides = {}) {
     maxTextureImageUnits: 16,
     maxVertexTextureImageUnits: 16,
     maxSamples: 8,
+    framebufferComplete: true,
+    instancing: true,
     deviceMemoryGb: 16,
     hardwareConcurrency: 8,
     ...overrides,
@@ -40,6 +49,21 @@ function createGl() {
     MAX_TEXTURE_IMAGE_UNITS: 5,
     MAX_VERTEX_TEXTURE_IMAGE_UNITS: 6,
     MAX_SAMPLES: 7,
+    TEXTURE_2D: 8,
+    RGBA: 9,
+    UNSIGNED_BYTE: 10,
+    FRAMEBUFFER: 11,
+    COLOR_ATTACHMENT0: 12,
+    FRAMEBUFFER_COMPLETE: 13,
+    createFramebuffer: () => ({}),
+    createTexture: () => ({}),
+    bindTexture() {},
+    texImage2D() {},
+    bindFramebuffer() {},
+    framebufferTexture2D() {},
+    checkFramebufferStatus: () => 13,
+    deleteFramebuffer() {},
+    deleteTexture() {},
     getShaderPrecisionFormat: () => ({ precision: 23 }),
     getExtension(name) {
       if (name === 'WEBGL_lose_context') return lose;
@@ -61,34 +85,51 @@ function createGl() {
 }
 
 test('capability probe reads WebGL2 limits and releases its temporary context', () => {
-  const { gl, lose } = createGl();
-  const canvas = {
-    getContext: (name) => (name === 'webgl2' ? gl : null),
-  };
+  const { gl: gl2, lose: lose2 } = createGl();
+  const { gl: gl1, lose: lose1 } = createGl();
+  let canvasCount = 0;
+  const canvases = [
+    { getContext: (name) => (name === 'webgl2' ? gl2 : null) },
+    { getContext: (name) => (name === 'webgl' ? gl1 : null) },
+  ];
   const capabilities = probeRendererCapabilities({
-    documentRef: { createElement: () => canvas },
+    documentRef: { createElement: () => canvases[canvasCount++] },
     navigatorRef: { deviceMemory: 8, hardwareConcurrency: 6 },
   });
 
+  assert.equal(capabilities.webgl1, true);
   assert.equal(capabilities.webgl2, true);
   assert.equal(capabilities.fragmentHighPrecision, true);
   assert.equal(capabilities.colorBufferFloat, true);
+  assert.equal(capabilities.instancing, true);
+  assert.equal(capabilities.framebufferComplete, true);
   assert.equal(capabilities.maxTextureSize, 16384);
   assert.equal(capabilities.deviceMemoryGb, 8);
-  assert.equal(lose.lost, true);
+  assert.equal(lose2.lost, true);
+  assert.equal(lose1.lost, true);
 });
 
 test('profile selection is capability-derived and fail-closed', () => {
-  assert.equal(selectRendererProfile(fullCapabilities()).id, 'high');
+  assert.equal(selectRendererProfile(fullCapabilities()).id, 'ultra');
   assert.equal(selectRendererProfile(fullCapabilities({ deviceMemoryGb: 6 })).id, 'balanced');
   assert.equal(selectRendererProfile(fullCapabilities({ colorBufferFloat: false })).id, 'mobile');
-  assert.equal(selectRendererProfile(fullCapabilities({ fragmentHighPrecision: false })).id, 'safe');
-  assert.equal(selectRendererProfile(fullCapabilities({ webgl2: false })).id, 'safe');
+  assert.equal(selectRendererProfile(fullCapabilities({ fragmentHighPrecision: false })).id, 'minimal');
+  assert.equal(selectRendererProfile(fullCapabilities({ webgl2: false })).id, 'fallback');
 });
 
 test('valid operator override wins while unknown values are ignored', () => {
-  assert.equal(selectRendererProfile(fullCapabilities(), 'safe').id, 'safe');
-  assert.equal(selectRendererProfile(fullCapabilities(), 'invented').id, 'high');
+  assert.equal(selectRendererProfile(fullCapabilities(), 'safe').id, 'minimal');
+  assert.equal(selectRendererProfile(fullCapabilities(), 'invented').id, 'ultra');
+});
+
+test('missing Google key preserves negotiated 3D tier and selects keyless map', () => {
+  const ultra = selectRendererProfile(fullCapabilities());
+  const keyless = rendererProfileForMapKey(ultra, false);
+
+  assert.equal(keyless.id, 'ultra');
+  assert.equal(keyless.sceneMode, '3d');
+  assert.equal(keyless.photoreal, false);
+  assert.equal(rendererProfileForMapKey(ultra, true), ultra);
 });
 
 test('mobile viewer options omit atmosphere and expensive translucency', () => {
@@ -102,7 +143,16 @@ test('mobile viewer options omit atmosphere and expensive translucency', () => {
   assert.equal(options.showRenderLoopErrors, false);
 });
 
-test('applying safe profile disables shader-heavy scene features', () => {
+test('minimal viewer starts directly in 2D without photoreal features', () => {
+  const profile = selectRendererProfile(fullCapabilities(), 'minimal');
+  const options = rendererViewerOptions(profile, { sceneMode2D: 'SCENE2D' });
+
+  assert.equal(options.sceneMode, 'SCENE2D');
+  assert.equal(options.skyAtmosphere, false);
+  assert.equal(options.orderIndependentTranslucency, false);
+});
+
+test('applying minimal profile disables shader-heavy scene features', () => {
   let styleProfile = null;
   const tileset = { maximumScreenSpaceError: 2 };
   const viewer = {
@@ -121,7 +171,7 @@ test('applying safe profile disables shader-heavy scene features', () => {
       requestRender() {},
     },
   };
-  const profile = selectRendererProfile(fullCapabilities(), 'safe');
+  const profile = selectRendererProfile(fullCapabilities(), 'minimal');
 
   applyRendererProfile(viewer, profile, {
     tileset,
@@ -133,7 +183,7 @@ test('applying safe profile disables shader-heavy scene features', () => {
   });
 
   assert.equal(viewer.resolutionScale, 0.6);
-  assert.equal(viewer.targetFrameRate, 30);
+  assert.equal(viewer.targetFrameRate, 24);
   assert.equal(viewer.scene.skyAtmosphere.show, false);
   assert.equal(viewer.scene.msaaSamples, 1);
   assert.equal(viewer.scene.postProcessStages.fxaa.enabled, false);
@@ -142,10 +192,10 @@ test('applying safe profile disables shader-heavy scene features', () => {
   assert.equal(viewer.scene.fog.enabled, false);
   assert.equal(viewer.scene.shadowMap.enabled, false);
   assert.equal(tileset.maximumScreenSpaceError, 8);
-  assert.equal(styleProfile, 'safe');
+  assert.equal(styleProfile, 'minimal');
 });
 
-test('atmosphere shader errors drop directly to mobile and restart rendering', () => {
+test('renderer failures negotiate one profile at a time and restart rendering', () => {
   let listener = null;
   const applied = [];
   const statuses = [];
@@ -178,39 +228,15 @@ test('atmosphere shader errors drop directly to mobile and restart rendering', (
 
   listener(viewer.scene, new Error('MSL computeAtmosphereScattering Program failed to link'));
 
-  assert.equal(recovery.getProfile().id, 'mobile');
-  assert.deepEqual(applied, ['mobile']);
+  assert.equal(recovery.getProfile().id, 'high');
+  assert.deepEqual(applied, ['high']);
   assert.equal(viewer.useDefaultRenderLoop, true);
   assert.equal(viewer.scene.requestRenderCalled, true);
   assert.deepEqual(statuses.map((status) => status.state), ['recovering', 'restarted']);
   recovery.destroy();
 });
 
-test('safe-profile shader failure exhausts recovery and blocks external restart', () => {
-  let listener = null;
-  const statuses = [];
-  const viewer = {
-    scene: {
-      renderError: {
-        addEventListener(callback) {
-          listener = callback;
-          return () => {};
-        },
-      },
-    },
-  };
-  const recovery = createRendererRecovery(viewer, {
-    initialProfile: selectRendererProfile(fullCapabilities(), 'safe'),
-    onStatus: (status) => statuses.push(status),
-  });
-
-  listener(viewer.scene, new Error('Shader Program failed to link'));
-
-  assert.equal(recovery.canRestart(), false);
-  assert.deepEqual(statuses.map((status) => status.state), ['failed']);
-});
-
-test('non-shader failures produce a sanitized terminal state instead of silence', () => {
+test('non-shader failures also negotiate downward instead of stopping early', () => {
   let listener = null;
   const statuses = [];
   const viewer = {
@@ -230,21 +256,90 @@ test('non-shader failures produce a sanitized terminal state instead of silence'
 
   listener(viewer.scene, new Error('Unexpected render invariant'));
 
-  assert.equal(recovery.canRestart(), false);
-  assert.equal(statuses[0].state, 'failed');
+  assert.equal(recovery.canRestart(), true);
+  assert.equal(recovery.getProfile().id, 'high');
+  assert.equal(statuses[0].state, 'recovering');
 });
 
-test('mobile and safe profiles never restore previously enabled fog', () => {
+test('fallback application failure advances again instead of stalling pending', () => {
+  let listener = null;
+  const applied = [];
+  const viewer = {
+    scene: {
+      renderError: {
+        addEventListener(callback) {
+          listener = callback;
+          return () => {};
+        },
+      },
+      requestRender() {},
+    },
+  };
+  const recovery = createRendererRecovery(viewer, {
+    initialProfile: RENDERER_PROFILES.ultra,
+    applyProfile: (profile) => {
+      applied.push(profile.id);
+      if (profile.id === 'high') throw new Error('high apply failed');
+    },
+    setTimer: (callback) => {
+      callback();
+      return 1;
+    },
+  });
+
+  listener(viewer.scene, new Error('initial renderer failed'));
+
+  assert.deepEqual(applied, ['high', 'balanced']);
+  assert.equal(recovery.getProfile().id, 'balanced');
+  assert.equal(recovery.canRestart(), true);
+});
+
+test('profile preparation failure advances past the failed candidate', () => {
+  let listener = null;
+  const prepared = [];
+  const viewer = {
+    scene: {
+      renderError: {
+        addEventListener(callback) {
+          listener = callback;
+          return () => {};
+        },
+      },
+      requestRender() {},
+    },
+  };
+  const recovery = createRendererRecovery(viewer, {
+    initialProfile: RENDERER_PROFILES.ultra,
+    prepareProfile: (profile) => {
+      prepared.push(profile.id);
+      if (profile.id === 'high') throw new Error('high preparation failed');
+      return profile;
+    },
+    setTimer: (callback) => {
+      callback();
+      return 1;
+    },
+  });
+
+  listener(viewer.scene, new Error('initial renderer failed'));
+
+  assert.deepEqual(prepared, ['high', 'balanced']);
+  assert.equal(recovery.getProfile().id, 'balanced');
+});
+
+test('mobile and minimal profiles never restore previously enabled fog', () => {
   assert.equal(rendererFogEnabled(selectRendererProfile(fullCapabilities()), true), true);
   assert.equal(rendererFogEnabled(selectRendererProfile(fullCapabilities(), 'mobile'), true), false);
-  assert.equal(rendererFogEnabled(selectRendererProfile(fullCapabilities(), 'safe'), true), false);
+  assert.equal(rendererFogEnabled(selectRendererProfile(fullCapabilities(), 'minimal'), true), false);
 });
 
 test('construction-only context changes require a profile-preserving reload', () => {
-  const high = selectRendererProfile(fullCapabilities());
+  const ultra = selectRendererProfile(fullCapabilities(), 'ultra');
+  const high = selectRendererProfile(fullCapabilities(), 'high');
   const balanced = selectRendererProfile(fullCapabilities({ deviceMemoryGb: 6 }));
   const mobile = selectRendererProfile(fullCapabilities(), 'mobile');
 
+  assert.equal(rendererRequiresRecreation(ultra, high), true);
   assert.equal(rendererRequiresRecreation(high, balanced), false);
   assert.equal(rendererRequiresRecreation(high, mobile), true);
   const fallbackUrl = new URL(rendererFallbackUrl(
@@ -274,7 +369,7 @@ test('recreated fallback does not restart the incompatible old context', () => {
     },
   };
   const recovery = createRendererRecovery(viewer, {
-    initialProfile: selectRendererProfile(fullCapabilities()),
+    initialProfile: selectRendererProfile(fullCapabilities(), 'mobile'),
     applyProfile: () => {},
     recreateProfile: () => true,
     setTimer: (callback) => {
@@ -285,7 +380,78 @@ test('recreated fallback does not restart the incompatible old context', () => {
 
   listener(viewer.scene, new Error('MSL computeAtmosphereScattering failed'));
 
-  assert.equal(recovery.getProfile().id, 'mobile');
+  assert.equal(recovery.getProfile().id, 'minimal');
   assert.equal(restarted, false);
   assert.equal(viewer.useDefaultRenderLoop, false);
+});
+
+test('each negotiated profile retains external keyless constraints', () => {
+  let listener = null;
+  const keylessUltra = rendererProfileForMapKey(RENDERER_PROFILES.ultra, false);
+  const viewer = {
+    scene: {
+      renderError: {
+        addEventListener(callback) {
+          listener = callback;
+          return () => {};
+        },
+      },
+      requestRender() {},
+    },
+  };
+  const recovery = createRendererRecovery(viewer, {
+    initialProfile: keylessUltra,
+    prepareProfile: (profile) => rendererProfileForMapKey(profile, false),
+    recreateProfile: () => true,
+  });
+
+  listener(viewer.scene, new Error('renderer failed'));
+
+  assert.equal(recovery.getProfile().id, 'high');
+  assert.equal(recovery.getProfile().photoreal, false);
+});
+
+test('profile ladder reaches static fallback and then terminates', () => {
+  const ids = [];
+  let profile = RENDERER_PROFILES.ultra;
+  while (profile) {
+    ids.push(profile.id);
+    profile = nextRendererProfile(profile);
+  }
+
+  assert.deepEqual(ids, ['ultra', 'high', 'balanced', 'mobile', 'minimal', 'fallback']);
+});
+
+test('renderer startup classifier advances GPU setup failures but not app logic errors', () => {
+  assert.equal(isRendererStartupError(new Error('WebGL framebuffer incomplete')), true);
+  assert.equal(isRendererStartupError(new Error('Post-process renderer initialization failed')), true);
+  assert.equal(isRendererStartupError(new Error('Data layer returned malformed JSON')), false);
+});
+
+test('renderer negotiation telemetry is local, bounded, and diagnostic-only', () => {
+  const values = new Map();
+  const storage = {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, String(value)),
+  };
+  recordRendererAttempt(
+    { profile: 'ultra', status: 'failed', reason: 'shader-compiler' },
+    { storage, now: () => 10 },
+  );
+  recordRendererAttempt(
+    { profile: 'high', status: 'running', reason: 'restarted' },
+    { storage, now: () => 20 },
+  );
+  const history = readRendererNegotiationHistory(storage);
+  const report = rendererDiagnostics({
+    capabilities: fullCapabilities({ gpuRenderer: 'Test GPU' }),
+    profile: RENDERER_PROFILES.high,
+    history,
+    navigatorRef: { userAgent: 'Test Browser', platform: 'Test Platform' },
+  });
+
+  assert.deepEqual(history.map((entry) => entry.profile), ['ultra', 'high']);
+  assert.equal(report.gpuRenderer, 'Test GPU');
+  assert.equal(report.selectedProfile, 'high');
+  assert.equal(report.browser, 'Test Browser');
 });

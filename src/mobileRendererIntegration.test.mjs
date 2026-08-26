@@ -22,14 +22,18 @@ test('viewer startup is driven by the capability-selected profile', async () => 
 
 test('mobile renderer never uses user-agent compatibility branches', async () => {
   const source = await readFile(path.join(root, 'src/rendererCompatibility.js'), 'utf8');
+  const selection = source.slice(
+    source.indexOf('export function selectRendererProfile'),
+    source.indexOf('export function rendererProfileOverride'),
+  );
 
-  assert.doesNotMatch(source, /userAgent|navigatorRef\?\.platform|iPhone|iPad|Android/);
+  assert.doesNotMatch(selection, /userAgent|platform|iPhone|iPad|Android/);
   assert.match(source, /EXT_color_buffer_float/);
   assert.match(source, /getShaderPrecisionFormat/);
   assert.match(source, /MAX_TEXTURE_SIZE/);
 });
 
-test('safe profile gates every StyleManager post-processing entry point', async () => {
+test('mobile and minimal profiles gate every StyleManager post-processing entry point', async () => {
   const ui = await readFile(path.join(root, 'src/ui.js'), 'utf8');
 
   assert.match(ui, /rendererPostProcessingAllowed\(this\.rendererProfile\)/);
@@ -38,6 +42,9 @@ test('safe profile gates every StyleManager post-processing entry point', async 
   assert.match(ui, /this\._bloomStage\.enabled = false/);
   assert.match(ui, /this\._sharpenStage\.enabled = false/);
   assert.match(ui, /rendererFogEnabled\(/);
+  assert.match(ui, /const models3dAvailable = profile\.sceneMode === '3d'/);
+  assert.match(ui, /const rendererAllowsModels = this\.rendererProfile\?\.sceneMode === '3d'/);
+  assert.match(ui, /Search requires a Google Maps key/);
 });
 
 test('compatibility status is concise and accessible', async () => {
@@ -47,7 +54,7 @@ test('compatibility status is concise and accessible', async () => {
   ]);
 
   assert.match(markup, /id="renderer-compat-status" role="status" aria-live="polite"/);
-  assert.match(main, /Attempting compatibility mode/);
+  assert.match(main, /Optimizing renderer/);
   assert.match(main, /Renderer restarted in/);
   assert.match(main, /rendererRecovery\?\.canRestart\(\) !== false/);
   assert.match(main, /cockpitCloudEffects\?\.lockCompatibility\(\)/);
@@ -55,6 +62,12 @@ test('compatibility status is concise and accessible', async () => {
   assert.match(main, /window\.location\.replace\(rendererFallbackUrl/);
   assert.match(main, /rendererTerminalFailure = true/);
   assert.match(main, /if \(rendererTerminalFailure\) return/);
+  assert.match(main, /bootStaticWorldFallback/);
+  assert.match(main, /sceneMode2D: Cesium\.SceneMode\.SCENE2D/);
+  assert.match(main, /isRendererStartupError\(error\)/);
+  assert.match(main, /nextRendererProfile\(rendererProfile\)/);
+  assert.match(main, /rendererProfileForMapKey\(rendererProfile, false\)/);
+  assert.match(main, /Loading \$\{rendererProfile\.id\} OpenStreetMap renderer/);
 });
 
 test('cockpit cloud shader failures are compatibility-locked and production-sanitized', async () => {

@@ -49,13 +49,21 @@ import {
   applyRendererProfile,
   createRendererRecovery,
   isShaderCompatibilityError,
+  isRendererStartupError,
+  nextRendererProfile,
   probeRendererCapabilities,
+  readRendererNegotiationHistory,
+  recordRendererAttempt,
+  rendererDiagnostics,
+  rendererFailureCategory,
   rendererFallbackUrl,
+  rendererProfileForMapKey,
   rendererProfileOverride,
   rendererRequiresRecreation,
   rendererViewerOptions,
   selectRendererProfile,
 } from './rendererCompatibility.js';
+import { bootStaticWorldFallback } from './staticWorldFallback.js';
 
 initLogoGaze();
 
@@ -119,69 +127,137 @@ async function init() {
       Cesium.Ion.defaultAccessToken = cesiumToken;
     }
 
-    // Set Google Maps API key for 3D Tiles
-    const googleApiKey = import.meta.env.GOOGLE_MAPS_API_KEY;
-    if (!googleApiKey) {
-      throw new Error('GOOGLE_MAPS_API_KEY not found. Set it as an environment variable.');
-    }
-    Cesium.GoogleMaps.defaultApiKey = googleApiKey;
-
-    // Expose API key globally for geocoding in locations.js
-    window.__GOOGLE_MAPS_API_KEY__ = googleApiKey;
-
     const rendererCapabilities = probeRendererCapabilities();
     rendererProfile = selectRendererProfile(
       rendererCapabilities,
       rendererProfileOverride(),
     );
-    const viewerProfileOptions = rendererViewerOptions(rendererProfile);
+    const googleApiKey = import.meta.env.GOOGLE_MAPS_API_KEY;
+    let rendererSelectionReason = 'capability-negotiation';
+    if (!googleApiKey && rendererProfile.photoreal) {
+      rendererProfile = rendererProfileForMapKey(rendererProfile, false);
+      rendererSelectionReason = 'google-map-key-unavailable';
+    }
+    if (googleApiKey) {
+      Cesium.GoogleMaps.defaultApiKey = googleApiKey;
+      window.__GOOGLE_MAPS_API_KEY__ = googleApiKey;
+    }
+    recordRendererAttempt({
+      profile: rendererProfile.id,
+      status: 'selected',
+      reason: rendererSelectionReason,
+    });
+    if (rendererProfile.id === 'fallback') {
+      recordRendererAttempt({
+        profile: rendererProfile.id,
+        status: 'running',
+        reason: 'static-fallback',
+      });
+      const settledUrl = new URL(window.location.href);
+      settledUrl.searchParams.delete('rendererFallback');
+      window.history.replaceState(null, '', settledUrl);
+      bootStaticWorldFallback({
+        reason: rendererCapabilities.webgl2
+          ? 'Static fallback profile selected after renderer negotiation.'
+          : 'WebGL2 is unavailable; static map mode activated.',
+        diagnostics: rendererDiagnostics({
+          capabilities: rendererCapabilities,
+          profile: rendererProfile,
+        }),
+        terminalUrl: import.meta.env.VITE_TERMINAL_API_URL
+          || 'https://terminal.mobius-substrate.com',
+      });
+      return;
+    }
+    const viewerProfileOptions = rendererViewerOptions(rendererProfile, {
+      sceneMode2D: Cesium.SceneMode.SCENE2D,
+    });
 
     // Create the Cesium viewer with minimal chrome
-    const viewer = new Cesium.Viewer('cesiumContainer', {
-      timeline: false,
-      animation: false,
-      baseLayerPicker: false,
-      geocoder: false,
-      homeButton: false,
-      sceneModePicker: false,
-      navigationHelpButton: false,
-      fullscreenButton: false,
-      vrButton: false,
-      selectionIndicator: false,
-      infoBox: false,
-      baseLayer: false,
-      ...viewerProfileOptions,
-      // Visible attribution container — Google Maps / 3D Tiles credits are
-      // required by Google's Terms of Service, so they must be shown (styled
-      // subtly via #cesium-credits). The credit line stays visible in
-      // clean-view AND recording modes too (ToS requires attribution while the
-      // content is displayed — those are the exact modes used to record
-      // demos), including the "Data attribution" link that opens the per-layer
-      // license popover.
-      creditContainer: (() => {
-        const el = document.createElement('div');
-        el.id = 'cesium-credits';
-        document.body.appendChild(el);
-        return el;
-      })(),
-    });
+    let viewer;
+    try {
+      viewer = new Cesium.Viewer('cesiumContainer', {
+        timeline: false,
+        animation: false,
+        baseLayerPicker: false,
+        geocoder: false,
+        homeButton: false,
+        sceneModePicker: false,
+        navigationHelpButton: false,
+        fullscreenButton: false,
+        vrButton: false,
+        selectionIndicator: false,
+        infoBox: false,
+        baseLayer: false,
+        ...viewerProfileOptions,
+        // Visible attribution container — Google Maps / 3D Tiles credits are
+        // required by Google's Terms of Service, so they must be shown (styled
+        // subtly via #cesium-credits). The credit line stays visible in
+        // clean-view AND recording modes too (ToS requires attribution while the
+        // content is displayed — those are the exact modes used to record
+        // demos), including the "Data attribution" link that opens the per-layer
+        // license popover.
+        creditContainer: (() => {
+          const el = document.createElement('div');
+          el.id = 'cesium-credits';
+          document.body.appendChild(el);
+          return el;
+        })(),
+      });
+    } catch (error) {
+      recordRendererAttempt({
+        profile: rendererProfile.id,
+        status: 'failed',
+        reason: rendererFailureCategory(error),
+      });
+      const nextProfile = nextRendererProfile(rendererProfile);
+      if (nextProfile) {
+        updateLoaderStatus('Optimizing renderer… Switching to compatibility mode…');
+        window.location.replace(rendererFallbackUrl(window.location.href, nextProfile.id));
+        return;
+      }
+      throw error;
+    }
 
     applyRendererProfile(viewer, rendererProfile);
     const rendererStatus = document.getElementById('renderer-compat-status');
-    const reportRendererStatus = ({ state, profile }) => {
+    const reportRendererStatus = ({
+      state,
+      profile,
+      previousProfile = null,
+      error = null,
+    }) => {
       if (!rendererStatus) return;
       clearTimeout(rendererStatusHideTimer);
       rendererStatus.dataset.state = state;
       rendererStatus.hidden = false;
       if (state === 'recovering') {
-        rendererStatus.textContent = 'Renderer initialization failed. Attempting compatibility mode…';
+        if (previousProfile) {
+          recordRendererAttempt({
+            profile: previousProfile,
+            status: 'failed',
+            reason: rendererFailureCategory(error),
+          });
+        }
+        recordRendererAttempt({
+          profile,
+          status: 'selected',
+          reason: 'fallback',
+        });
+        rendererStatus.textContent = 'Optimizing renderer… Switching to compatibility mode…';
         updateLoaderStatus(rendererStatus.textContent);
       } else if (state === 'restarted') {
+        recordRendererAttempt({ profile, status: 'running', reason: 'restarted' });
         rendererStatus.textContent = `Renderer restarted in ${profile} compatibility mode.`;
         rendererStatusHideTimer = setTimeout(() => {
           rendererStatus.hidden = true;
         }, 4_000);
       } else {
+        recordRendererAttempt({
+          profile,
+          status: 'failed',
+          reason: rendererFailureCategory(error),
+        });
         rendererTerminalFailure = true;
         rendererStatus.textContent = 'Renderer compatibility mode could not recover this GPU.';
         updateLoaderStatus(rendererStatus.textContent, { force: true });
@@ -203,6 +279,10 @@ async function init() {
         window.location.replace(rendererFallbackUrl(window.location.href, nextProfile.id));
         return true;
       },
+      prepareProfile: (nextProfile) => rendererProfileForMapKey(
+        nextProfile,
+        Boolean(googleApiKey),
+      ),
       onStatus: reportRendererStatus,
       development: import.meta.env.DEV,
     });
@@ -224,7 +304,7 @@ async function init() {
     // Hide Cesium's default globe — Google Photorealistic 3D Tiles provide their own
     // globe at all LODs (street level → orbital). The default globe's 2D imagery
     // clips through 3D tile buildings at close range.
-    viewer.scene.globe.show = false;
+    viewer.scene.globe.show = !rendererProfile.photoreal;
 
     // Keep a sky behind Google 3D Tiles, but soften Cesium's high-intensity
     // default atmosphere. With the globe hidden its bright limb otherwise
@@ -236,22 +316,27 @@ async function init() {
       viewer.scene.skyAtmosphere.brightnessShift = -0.08;
     }
 
-    updateLoaderStatus('Loading Google 3D Tiles...');
-    try {
-      // Load Google Photorealistic 3D Tiles
-      tileset = await Cesium.createGooglePhotorealistic3DTileset({
-        onlyUsingWithGoogleGeocoder: true,
-      });
-      viewer.scene.primitives.add(tileset);
-      applyRendererProfile(viewer, rendererProfile, { tileset });
-      // NOTE: Cesium World Terrain intentionally disabled — conflicts with Google 3D Tiles at high zoom.
-      // Google Photorealistic 3D Tiles provide their own terrain/elevation.
-      viewer.scene.globe.show = false;
-    } catch (tileError) {
-      console.warn('[Init] Google 3D Tiles unavailable, falling back to Cesium globe:', tileError);
-      const tileErrorDetail = describeError(tileError);
-      updateLoaderStatus(`Google 3D Tiles unavailable (${tileErrorDetail}). Continuing in fallback mode...`);
-      // Keep Cesium globe visible as fallback instead of aborting the app.
+    if (rendererProfile.photoreal && googleApiKey) {
+      updateLoaderStatus('Loading Google 3D Tiles...');
+      try {
+        // Load Google Photorealistic 3D Tiles
+        tileset = await Cesium.createGooglePhotorealistic3DTileset({
+          onlyUsingWithGoogleGeocoder: true,
+        });
+        viewer.scene.primitives.add(tileset);
+        applyRendererProfile(viewer, rendererProfile, { tileset });
+        // NOTE: Cesium World Terrain intentionally disabled — conflicts with Google 3D Tiles at high zoom.
+        // Google Photorealistic 3D Tiles provide their own terrain/elevation.
+        viewer.scene.globe.show = false;
+      } catch (tileError) {
+        console.warn('[Init] Google 3D Tiles unavailable, falling back to Cesium globe:', tileError);
+        const tileErrorDetail = describeError(tileError);
+        updateLoaderStatus(`Google 3D Tiles unavailable (${tileErrorDetail}). Continuing in fallback mode...`);
+        // Keep Cesium globe visible as fallback instead of aborting the app.
+        viewer.scene.globe.show = true;
+      }
+    } else {
+      updateLoaderStatus(`Loading ${rendererProfile.id} OpenStreetMap renderer...`);
       viewer.scene.globe.show = true;
     }
 
@@ -261,6 +346,7 @@ async function init() {
       googleTileset: tileset,
       cesiumToken,
       initialStack: tileset ? 'photoreal' : 'osm',
+      allowTerrain: rendererProfile.terrain,
       // Task 5 (height-datum fix): rebroadcast stack changes as a window
       // CustomEvent so data layers (CCTV per-regime ground resolution) can
       // react without coupling MapStackController to layer modules. Fires on
@@ -322,6 +408,18 @@ async function init() {
     }
     // Restoration starts only after the complete production registry is sealed.
     dataManager.finalizeRegistrations(LAYER_STATE_REGISTRY);
+    if (rendererProfile.sceneMode !== '3d') {
+      dataManager.setLayerParams(
+        'flights',
+        { models3d: false, rendererModelsAllowed: false },
+        { origin: 'programmatic' },
+      );
+      dataManager.setLayerParams(
+        'military',
+        { models3d: false, rendererModelsAllowed: false },
+        { origin: 'programmatic' },
+      );
+    }
     if (import.meta.env.DEV) {
       window.__gevQaRegisterLayer = (targetManager, layerModule) => {
         if (targetManager !== dataManager) throw new Error('QA layer manager mismatch');
@@ -459,6 +557,11 @@ async function init() {
     // already hidden, and waiting for the next transition would leave the
     // loop burning behind a hidden tab. (perf wave 2 fix)
     syncVisibilitySuspension();
+    recordRendererAttempt({
+      profile: rendererProfile.id,
+      status: 'running',
+      reason: 'startup-complete',
+    });
 
     window.__godsEyeView = {
       viewer,
@@ -476,6 +579,11 @@ async function init() {
       cockpitCloudEffects,
       rendererCapabilities,
       getRendererProfile: () => rendererRecovery?.getProfile?.() || rendererProfile,
+      getRendererDiagnostics: () => rendererDiagnostics({
+        capabilities: rendererCapabilities,
+        profile: rendererRecovery?.getProfile?.() || rendererProfile,
+        history: readRendererNegotiationHistory(),
+      }),
       getRenderGovernorDiagnostics,
       requestRender: governorRequestRender,
     };
@@ -485,6 +593,21 @@ async function init() {
     destroyTerminalIntegration?.();
     rendererRecovery?.destroy();
     clearTimeout(rendererStatusHideTimer);
+    if (rendererProfile && isRendererStartupError(error)) {
+      recordRendererAttempt({
+        profile: rendererProfile.id,
+        status: 'failed',
+        reason: rendererFailureCategory(error),
+      });
+      const nextProfile = nextRendererProfile(rendererProfile);
+      if (nextProfile) {
+        updateLoaderStatus('Optimizing renderer… Switching to compatibility mode…', {
+          force: true,
+        });
+        window.location.replace(rendererFallbackUrl(window.location.href, nextProfile.id));
+        return;
+      }
+    }
     if (import.meta.env.DEV) {
       console.error("God's Eye View initialization failed:", error);
     } else {
