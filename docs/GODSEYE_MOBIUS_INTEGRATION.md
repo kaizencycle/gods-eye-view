@@ -208,10 +208,18 @@ USGS all-day GeoJSON
   → getStats(): count, lastUpdate, error
 ```
 
-The layer polls every 60 seconds. Each refresh atomically removes the previous
-Cesium entities and rebuilds them from the accepted response. The
-`getAnalystRecords()` method already provides a useful JSON-safe projection:
-`id`, `magnitude`, `depthKm`, `lat`, `lon`, `timeMs`, and `place`.
+The layer polls every 60 seconds, but replacement is **not transactional**.
+After validating only that `features` is an array, `update()` calls
+`entities.removeAll()` and then validates records implicitly while iterating. A
+malformed feature can throw after some new entities have already been added.
+The catch returns `false`, so the manager emits `refresh-failed` while that
+partial collection can remain visible. The prior successful `lastUpdate`
+timestamp is retained.
+
+`getAnalystRecords()` provides a useful JSON-safe projection: `id`, `magnitude`,
+`depthKm`, `lat`, `lon`, `timeMs`, and `place`. Its output describes the
+currently visible in-memory collection, however, and is not by itself proof
+that the latest refresh completed successfully.
 
 ### Current click behavior
 
@@ -259,6 +267,27 @@ claims otherwise would hide required integration work.
 The manager’s current `refresh` event is a timing signal, not a complete
 post-poll observation hook. Reaching through `dataManager.layers` to access a
 module would depend on private manager internals and is not recommended.
+
+### Accepted-snapshot boundary
+
+The Mobius adapter must subscribe to manager outcomes and retain its own
+accepted earthquake snapshot:
+
+1. After a successful initial `visibility` event or recurring `refresh` event,
+   call the public record reader and fingerprint every complete normalized
+   record.
+2. On `refresh-failed` or `refresh-cancelled`, do not replace that accepted
+   snapshot or advance its ingestion epoch.
+3. On click, fingerprint the picked entity's complete normalized values and
+   require an exact match in the last accepted snapshot.
+4. If no exact match exists, do not issue an ordinary verified packet. Report
+   the observation as unaccepted/unresolved, or refuse capture in the first
+   proof of concept.
+
+Matching only the source ID is insufficient because a failed refresh can
+partially replace a record while retaining the same USGS ID. This adapter-owned
+boundary avoids associating partial displayed state with the previous
+successful ingestion epoch without requiring a core-layer change.
 
 ## Recommended Mobius attachment
 
@@ -313,7 +342,9 @@ Keep two separate facts:
 The source observation may create a normalized candidate in memory. The click
 creates and locally appends the EPICON packet for the PoC. Recording both lanes
 later is possible, but conflating poll time with click time would make replay
-ambiguous.
+ambiguous. A displayed entity is eligible for the ordinary packet path only
+when its full normalized fingerprint matches the adapter's last accepted
+snapshot.
 
 ### Candidate EPICON packet
 
@@ -420,6 +451,7 @@ not imply permission to persist the provider payload.
 - Add the one composition-root attachment.
 - Resolve only earthquake entity picks.
 - Snapshot values already present on the picked entity.
+- Require an exact match against the last manager-confirmed accepted snapshot.
 - Generate one EPICON packet per accepted user observation.
 - Append locally and expose a local read/export path.
 - Do not change the earthquake ellipse, label, camera, or layer lifecycle.
