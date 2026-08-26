@@ -50,7 +50,9 @@ import {
   createRendererRecovery,
   isShaderCompatibilityError,
   probeRendererCapabilities,
+  rendererFallbackUrl,
   rendererProfileOverride,
+  rendererRequiresRecreation,
   rendererViewerOptions,
   selectRendererProfile,
 } from './rendererCompatibility.js';
@@ -196,9 +198,21 @@ async function init() {
         });
         if (!nextProfile.postProcessing) cockpitCloudEffects?.lockCompatibility();
       },
+      recreateProfile: (nextProfile, previousProfile) => {
+        if (!rendererRequiresRecreation(previousProfile, nextProfile)) return false;
+        window.location.replace(rendererFallbackUrl(window.location.href, nextProfile.id));
+        return true;
+      },
       onStatus: reportRendererStatus,
       development: import.meta.env.DEV,
     });
+    const fallbackMarker = new URLSearchParams(window.location.search).get('rendererFallback');
+    if (fallbackMarker === rendererProfile.id) {
+      reportRendererStatus({ state: 'restarted', profile: rendererProfile.id });
+      const settledUrl = new URL(window.location.href);
+      settledUrl.searchParams.delete('rendererFallback');
+      window.history.replaceState(null, '', settledUrl);
+    }
 
     // Register per-layer data attribution into the "Data attribution" popover.
     // Required by each source's license (ODbL, CC BY-NC-SA, NASA FIRMS, etc.);

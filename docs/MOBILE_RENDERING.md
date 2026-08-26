@@ -117,7 +117,10 @@ therefore remains required:
 3. Apply the next lower profile, ending at `safe`.
 4. Disable atmosphere and the complete post-process collection before the next
    frame.
-5. Re-enable Cesium's default render loop and request a render.
+5. Update runtime MSAA immediately. If the fallback changes construction-only
+   context settings (OIT or preserved drawing buffers), reload once with a
+   profile marker while preserving camera/share hash state; otherwise re-enable
+   Cesium's default render loop and request a render.
 6. Show a concise compatibility status instead of Cesium's raw shader output.
 7. Keep detailed compiler diagnostics in development logs only.
 

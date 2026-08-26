@@ -51,6 +51,8 @@ test('compatibility status is concise and accessible', async () => {
   assert.match(main, /Renderer restarted in/);
   assert.match(main, /rendererRecovery\?\.canRestart\(\) !== false/);
   assert.match(main, /cockpitCloudEffects\?\.lockCompatibility\(\)/);
+  assert.match(main, /rendererRequiresRecreation\(/);
+  assert.match(main, /window\.location\.replace\(rendererFallbackUrl/);
   assert.match(main, /rendererTerminalFailure = true/);
   assert.match(main, /if \(rendererTerminalFailure\) return/);
 });

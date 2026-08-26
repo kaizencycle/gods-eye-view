@@ -190,6 +190,19 @@ export function rendererFogEnabled(profile, requested) {
   return profile?.fog !== false && requested === true;
 }
 
+export function rendererRequiresRecreation(current, next) {
+  if (!current || !next) return false;
+  return current.orderIndependentTranslucency !== next.orderIndependentTranslucency
+    || current.preserveDrawingBuffer !== next.preserveDrawingBuffer;
+}
+
+export function rendererFallbackUrl(href, profileId) {
+  const url = new URL(href);
+  url.searchParams.set('rendererProfile', profileId);
+  url.searchParams.set('rendererFallback', profileId);
+  return url.href;
+}
+
 /** Cesium Viewer options that must be chosen before context creation. */
 export function rendererViewerOptions(profile) {
   const selected = profile || RENDERER_PROFILES.safe;
@@ -220,6 +233,7 @@ export function applyRendererProfile(viewer, profile, {
   viewer.targetFrameRate = profile.targetFrameRate;
   viewer.shadows = profile.shadows;
   const scene = viewer.scene;
+  if ('msaaSamples' in scene) scene.msaaSamples = profile.msaaSamples;
   if (scene.skyAtmosphere) scene.skyAtmosphere.show = profile.atmosphere;
   if (scene.fog) scene.fog.enabled = profile.fog;
   if (scene.shadowMap) scene.shadowMap.enabled = profile.shadows;
@@ -267,6 +281,7 @@ export function createRendererRecovery(viewer, {
   initialProfile,
   applyProfile = (profile) => applyRendererProfile(viewer, profile),
   onStatus = () => {},
+  recreateProfile = () => false,
   development = false,
   setTimer = globalThis.setTimeout,
 } = {}) {
@@ -295,12 +310,14 @@ export function createRendererRecovery(viewer, {
       return;
     }
     recoveryPending = true;
+    const previousProfile = profile;
     profile = fallback;
     onStatus({ state: 'recovering', profile: profile.id, error });
     if (development) {
       console.warn(`[Renderer] Falling back to ${profile.id}:`, error);
     }
     applyProfile(profile);
+    if (recreateProfile(profile, previousProfile) === true) return;
     schedule(() => {
       if (destroyed) return;
       viewer.useDefaultRenderLoop = true;

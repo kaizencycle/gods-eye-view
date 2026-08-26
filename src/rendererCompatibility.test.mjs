@@ -5,7 +5,9 @@ import {
   applyRendererProfile,
   createRendererRecovery,
   probeRendererCapabilities,
+  rendererFallbackUrl,
   rendererFogEnabled,
+  rendererRequiresRecreation,
   rendererViewerOptions,
   selectRendererProfile,
 } from './rendererCompatibility.js';
@@ -107,6 +109,7 @@ test('applying safe profile disables shader-heavy scene features', () => {
     resolutionScale: 1,
     shadows: true,
     scene: {
+      msaaSamples: 4,
       skyAtmosphere: { show: true },
       fog: { enabled: true },
       postProcessStages: {
@@ -132,6 +135,7 @@ test('applying safe profile disables shader-heavy scene features', () => {
   assert.equal(viewer.resolutionScale, 0.6);
   assert.equal(viewer.targetFrameRate, 30);
   assert.equal(viewer.scene.skyAtmosphere.show, false);
+  assert.equal(viewer.scene.msaaSamples, 1);
   assert.equal(viewer.scene.postProcessStages.fxaa.enabled, false);
   assert.equal(viewer.scene.postProcessStages.ambientOcclusion.enabled, false);
   assert.equal(viewer.scene.postProcessStages.bloom.enabled, false);
@@ -234,4 +238,54 @@ test('mobile and safe profiles never restore previously enabled fog', () => {
   assert.equal(rendererFogEnabled(selectRendererProfile(fullCapabilities()), true), true);
   assert.equal(rendererFogEnabled(selectRendererProfile(fullCapabilities(), 'mobile'), true), false);
   assert.equal(rendererFogEnabled(selectRendererProfile(fullCapabilities(), 'safe'), true), false);
+});
+
+test('construction-only context changes require a profile-preserving reload', () => {
+  const high = selectRendererProfile(fullCapabilities());
+  const balanced = selectRendererProfile(fullCapabilities({ deviceMemoryGb: 6 }));
+  const mobile = selectRendererProfile(fullCapabilities(), 'mobile');
+
+  assert.equal(rendererRequiresRecreation(high, balanced), false);
+  assert.equal(rendererRequiresRecreation(high, mobile), true);
+  const fallbackUrl = new URL(rendererFallbackUrl(
+    'https://world.example/?foo=1#lat=30',
+    'mobile',
+  ));
+  assert.equal(fallbackUrl.searchParams.get('rendererProfile'), 'mobile');
+  assert.equal(fallbackUrl.searchParams.get('rendererFallback'), 'mobile');
+  assert.equal(fallbackUrl.hash, '#lat=30');
+});
+
+test('recreated fallback does not restart the incompatible old context', () => {
+  let listener = null;
+  let restarted = false;
+  const viewer = {
+    useDefaultRenderLoop: false,
+    scene: {
+      renderError: {
+        addEventListener(callback) {
+          listener = callback;
+          return () => {};
+        },
+      },
+      requestRender() {
+        restarted = true;
+      },
+    },
+  };
+  const recovery = createRendererRecovery(viewer, {
+    initialProfile: selectRendererProfile(fullCapabilities()),
+    applyProfile: () => {},
+    recreateProfile: () => true,
+    setTimer: (callback) => {
+      callback();
+      return 1;
+    },
+  });
+
+  listener(viewer.scene, new Error('MSL computeAtmosphereScattering failed'));
+
+  assert.equal(recovery.getProfile().id, 'mobile');
+  assert.equal(restarted, false);
+  assert.equal(viewer.useDefaultRenderLoop, false);
 });
