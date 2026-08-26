@@ -1,8 +1,16 @@
-const PROFILE_ORDER = Object.freeze(['high', 'balanced', 'mobile', 'safe']);
+const PROFILE_ORDER = Object.freeze([
+  'ultra',
+  'high',
+  'balanced',
+  'mobile',
+  'minimal',
+  'fallback',
+]);
+export const RENDERER_NEGOTIATION_STORAGE_KEY = 'gev:renderer-negotiation:v1';
 
 export const RENDERER_PROFILES = Object.freeze({
-  high: Object.freeze({
-    id: 'high',
+  ultra: Object.freeze({
+    id: 'ultra',
     atmosphere: true,
     postProcessing: true,
     fog: true,
@@ -13,19 +21,41 @@ export const RENDERER_PROFILES = Object.freeze({
     preserveDrawingBuffer: true,
     maximumScreenSpaceError: 2,
     targetFrameRate: 60,
+    sceneMode: '3d',
+    photoreal: true,
+    terrain: true,
   }),
-  balanced: Object.freeze({
-    id: 'balanced',
+  high: Object.freeze({
+    id: 'high',
     atmosphere: true,
     postProcessing: true,
     fog: true,
     shadows: false,
     msaaSamples: 2,
-    resolutionScale: 0.9,
-    orderIndependentTranslucency: true,
+    resolutionScale: 1,
+    orderIndependentTranslucency: false,
     preserveDrawingBuffer: true,
-    maximumScreenSpaceError: 3,
+    maximumScreenSpaceError: 2,
+    targetFrameRate: 60,
+    sceneMode: '3d',
+    photoreal: true,
+    terrain: true,
+  }),
+  balanced: Object.freeze({
+    id: 'balanced',
+    atmosphere: false,
+    postProcessing: true,
+    fog: false,
+    shadows: false,
+    msaaSamples: 1,
+    resolutionScale: 0.85,
+    orderIndependentTranslucency: false,
+    preserveDrawingBuffer: true,
+    maximumScreenSpaceError: 4,
     targetFrameRate: 45,
+    sceneMode: '3d',
+    photoreal: true,
+    terrain: true,
   }),
   mobile: Object.freeze({
     id: 'mobile',
@@ -34,14 +64,17 @@ export const RENDERER_PROFILES = Object.freeze({
     fog: false,
     shadows: false,
     msaaSamples: 1,
-    resolutionScale: 0.75,
+    resolutionScale: 0.7,
     orderIndependentTranslucency: false,
     preserveDrawingBuffer: false,
     maximumScreenSpaceError: 5,
     targetFrameRate: 30,
+    sceneMode: '3d',
+    photoreal: true,
+    terrain: true,
   }),
-  safe: Object.freeze({
-    id: 'safe',
+  minimal: Object.freeze({
+    id: 'minimal',
     atmosphere: false,
     postProcessing: false,
     fog: false,
@@ -51,7 +84,26 @@ export const RENDERER_PROFILES = Object.freeze({
     orderIndependentTranslucency: false,
     preserveDrawingBuffer: false,
     maximumScreenSpaceError: 8,
-    targetFrameRate: 30,
+    targetFrameRate: 24,
+    sceneMode: '2d',
+    photoreal: false,
+    terrain: false,
+  }),
+  fallback: Object.freeze({
+    id: 'fallback',
+    atmosphere: false,
+    postProcessing: false,
+    fog: false,
+    shadows: false,
+    msaaSamples: 0,
+    resolutionScale: 1,
+    orderIndependentTranslucency: false,
+    preserveDrawingBuffer: false,
+    maximumScreenSpaceError: null,
+    targetFrameRate: 0,
+    sceneMode: 'static',
+    photoreal: false,
+    terrain: false,
   }),
 });
 
@@ -75,6 +127,61 @@ function releaseContext(gl) {
   }
 }
 
+function probeFramebuffer(gl) {
+  if (!gl?.createFramebuffer || !gl?.createTexture) return null;
+  let framebuffer = null;
+  let texture = null;
+  try {
+    framebuffer = gl.createFramebuffer();
+    texture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.RGBA,
+      1,
+      1,
+      0,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      null,
+    );
+    gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+    gl.framebufferTexture2D(
+      gl.FRAMEBUFFER,
+      gl.COLOR_ATTACHMENT0,
+      gl.TEXTURE_2D,
+      texture,
+      0,
+    );
+    return gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+  } catch {
+    return false;
+  } finally {
+    try {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.bindTexture(gl.TEXTURE_2D, null);
+      if (framebuffer) gl.deleteFramebuffer(framebuffer);
+      if (texture) gl.deleteTexture(texture);
+    } catch {
+      // Probe resources are best-effort.
+    }
+  }
+}
+
+function gpuIdentity(gl) {
+  try {
+    const extension = gl?.getExtension?.('WEBGL_debug_renderer_info');
+    if (!extension) return { gpuVendor: null, gpuRenderer: null };
+    return {
+      gpuVendor: String(gl.getParameter(extension.UNMASKED_VENDOR_WEBGL) || '') || null,
+      gpuRenderer: String(gl.getParameter(extension.UNMASKED_RENDERER_WEBGL) || '') || null,
+    };
+  } catch {
+    return { gpuVendor: null, gpuRenderer: null };
+  }
+}
+
 /** Probe browser GPU capabilities using a temporary WebGL context. */
 export function probeRendererCapabilities({
   documentRef = globalThis.document,
@@ -88,6 +195,8 @@ export function probeRendererCapabilities({
       fragmentHighPrecision: false,
       colorBufferFloat: false,
       floatTextureLinear: false,
+      framebufferComplete: false,
+      instancing: false,
       maxTextureSize: null,
       maxRenderbufferSize: null,
       maxTextureImageUnits: null,
@@ -95,6 +204,8 @@ export function probeRendererCapabilities({
       maxSamples: null,
       deviceMemoryGb: finiteOrNull(navigatorRef?.deviceMemory),
       hardwareConcurrency: finiteOrNull(navigatorRef?.hardwareConcurrency),
+      gpuVendor: null,
+      gpuRenderer: null,
     };
   }
 
@@ -112,14 +223,14 @@ export function probeRendererCapabilities({
   } catch {
     gl2 = null;
   }
-  let gl1 = gl2;
-  if (!gl1) {
-    try {
-      gl1 = canvas.getContext('webgl', attributes)
-        || canvas.getContext('experimental-webgl', attributes);
-    } catch {
-      gl1 = null;
-    }
+  const webgl1Canvas = documentRef?.createElement?.('canvas');
+  let gl1 = null;
+  try {
+    gl1 = webgl1Canvas?.getContext?.('webgl', attributes)
+      || webgl1Canvas?.getContext?.('experimental-webgl', attributes)
+      || null;
+  } catch {
+    gl1 = null;
   }
   const gl = gl2 || gl1;
   let fragmentHighPrecision = false;
@@ -130,12 +241,15 @@ export function probeRendererCapabilities({
   } catch {
     fragmentHighPrecision = false;
   }
+  const identity = gpuIdentity(gl);
   const capabilities = {
     webgl1: Boolean(gl1),
     webgl2: Boolean(gl2),
     fragmentHighPrecision,
     colorBufferFloat: Boolean(gl2?.getExtension?.('EXT_color_buffer_float')),
     floatTextureLinear: Boolean(gl?.getExtension?.('OES_texture_float_linear')),
+    framebufferComplete: probeFramebuffer(gl2),
+    instancing: Boolean(gl2 || gl?.getExtension?.('ANGLE_instanced_arrays')),
     maxTextureSize: gl ? readLimit(gl, gl.MAX_TEXTURE_SIZE) : null,
     maxRenderbufferSize: gl ? readLimit(gl, gl.MAX_RENDERBUFFER_SIZE) : null,
     maxTextureImageUnits: gl ? readLimit(gl, gl.MAX_TEXTURE_IMAGE_UNITS) : null,
@@ -143,22 +257,26 @@ export function probeRendererCapabilities({
     maxSamples: gl2 ? readLimit(gl2, gl2.MAX_SAMPLES) : null,
     deviceMemoryGb: finiteOrNull(navigatorRef?.deviceMemory),
     hardwareConcurrency: finiteOrNull(navigatorRef?.hardwareConcurrency),
+    ...identity,
   };
-  releaseContext(gl);
+  releaseContext(gl2);
+  if (gl1 !== gl2) releaseContext(gl1);
   return capabilities;
 }
 
 /** Select a renderer profile from measured capability limits. */
 export function selectRendererProfile(capabilities = {}, override = null) {
-  const requested = typeof override === 'string' ? override.trim().toLowerCase() : '';
+  let requested = typeof override === 'string' ? override.trim().toLowerCase() : '';
+  if (requested === 'safe') requested = 'minimal';
   if (Object.hasOwn(RENDERER_PROFILES, requested)) return RENDERER_PROFILES[requested];
 
-  if (!capabilities.webgl2
-    || !capabilities.fragmentHighPrecision
+  if (!capabilities.webgl2) return RENDERER_PROFILES.fallback;
+  if (!capabilities.fragmentHighPrecision
+    || capabilities.framebufferComplete === false
     || (capabilities.maxTextureSize !== null && capabilities.maxTextureSize < 4096)
     || (capabilities.maxRenderbufferSize !== null && capabilities.maxRenderbufferSize < 4096)
     || capabilities.maxVertexTextureImageUnits === 0) {
-    return RENDERER_PROFILES.safe;
+    return RENDERER_PROFILES.minimal;
   }
   if (!capabilities.colorBufferFloat
     || (capabilities.maxSamples !== null && capabilities.maxSamples < 2)
@@ -171,7 +289,11 @@ export function selectRendererProfile(capabilities = {}, override = null) {
     || (capabilities.maxSamples !== null && capabilities.maxSamples < 4)) {
     return RENDERER_PROFILES.balanced;
   }
-  return RENDERER_PROFILES.high;
+  if ((capabilities.deviceMemoryGb !== null && capabilities.deviceMemoryGb <= 12)
+    || (capabilities.maxSamples !== null && capabilities.maxSamples < 8)) {
+    return RENDERER_PROFILES.high;
+  }
+  return RENDERER_PROFILES.ultra;
 }
 
 export function rendererProfileOverride(search = globalThis.location?.search || '') {
@@ -180,6 +302,14 @@ export function rendererProfileOverride(search = globalThis.location?.search || 
   } catch {
     return null;
   }
+}
+
+export function rendererProfileForMapKey(profile, hasGoogleMapKey) {
+  if (!profile || hasGoogleMapKey || profile.photoreal === false) return profile;
+  return Object.freeze({
+    ...profile,
+    photoreal: false,
+  });
 }
 
 export function rendererPostProcessingAllowed(profile) {
@@ -193,7 +323,10 @@ export function rendererFogEnabled(profile, requested) {
 export function rendererRequiresRecreation(current, next) {
   if (!current || !next) return false;
   return current.orderIndependentTranslucency !== next.orderIndependentTranslucency
-    || current.preserveDrawingBuffer !== next.preserveDrawingBuffer;
+    || current.preserveDrawingBuffer !== next.preserveDrawingBuffer
+    || current.sceneMode !== next.sceneMode
+    || current.photoreal !== next.photoreal
+    || current.terrain !== next.terrain;
 }
 
 export function rendererFallbackUrl(href, profileId) {
@@ -203,19 +336,105 @@ export function rendererFallbackUrl(href, profileId) {
   return url.href;
 }
 
+export function rendererFailureCategory(error) {
+  const message = String(error?.message || error || '');
+  if (/atmosphere|computeAtmosphereScattering/i.test(message)) return 'atmosphere-shader';
+  if (/shader|program failed to link|compile|\bMSL\b|\bANGLE\b/i.test(message)) {
+    return 'shader-compiler';
+  }
+  if (/context|webgl/i.test(message)) return 'webgl-context';
+  return 'render-failure';
+}
+
+function safeSessionStorage() {
+  try {
+    return globalThis.sessionStorage || null;
+  } catch {
+    return null;
+  }
+}
+
+export function readRendererNegotiationHistory(storage = safeSessionStorage()) {
+  try {
+    const parsed = JSON.parse(storage?.getItem?.(RENDERER_NEGOTIATION_STORAGE_KEY) || '[]');
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((entry) => (
+      entry
+      && typeof entry.profile === 'string'
+      && typeof entry.status === 'string'
+      && Number.isFinite(entry.at)
+    )).slice(-24);
+  } catch {
+    return [];
+  }
+}
+
+export function recordRendererAttempt(entry, {
+  storage = safeSessionStorage(),
+  now = () => Date.now(),
+} = {}) {
+  const profile = String(entry?.profile || '');
+  const status = String(entry?.status || '');
+  if (!Object.hasOwn(RENDERER_PROFILES, profile) || !status) return [];
+  const history = readRendererNegotiationHistory(storage);
+  history.push({
+    profile,
+    status,
+    reason: entry?.reason ? String(entry.reason) : null,
+    at: now(),
+  });
+  const bounded = history.slice(-24);
+  try {
+    storage?.setItem?.(RENDERER_NEGOTIATION_STORAGE_KEY, JSON.stringify(bounded));
+  } catch {
+    // Negotiation telemetry is local and best-effort.
+  }
+  return bounded;
+}
+
+export function rendererDiagnostics({
+  capabilities,
+  profile,
+  history = readRendererNegotiationHistory(),
+  navigatorRef = globalThis.navigator,
+} = {}) {
+  return {
+    browser: String(navigatorRef?.userAgent || 'unavailable'),
+    platform: String(navigatorRef?.platform || 'unavailable'),
+    gpuVendor: capabilities?.gpuVendor ?? null,
+    gpuRenderer: capabilities?.gpuRenderer ?? null,
+    webgl1: capabilities?.webgl1 === true,
+    webgl2: capabilities?.webgl2 === true,
+    selectedProfile: profile?.id || 'fallback',
+    disabledFeatures: Object.entries({
+      atmosphere: profile?.atmosphere,
+      postProcessing: profile?.postProcessing,
+      fog: profile?.fog,
+      shadows: profile?.shadows,
+      photoreal: profile?.photoreal,
+      terrain: profile?.terrain,
+    }).filter(([, enabled]) => enabled === false).map(([name]) => name),
+    capabilities: { ...(capabilities || {}) },
+    history: history.map((entry) => ({ ...entry })),
+  };
+}
+
 /** Cesium Viewer options that must be chosen before context creation. */
-export function rendererViewerOptions(profile) {
-  const selected = profile || RENDERER_PROFILES.safe;
+export function rendererViewerOptions(profile, { sceneMode2D = undefined } = {}) {
+  const selected = profile || RENDERER_PROFILES.minimal;
   return {
     msaaSamples: selected.msaaSamples,
     skyAtmosphere: selected.atmosphere ? undefined : false,
     orderIndependentTranslucency: selected.orderIndependentTranslucency,
     shadows: selected.shadows,
     showRenderLoopErrors: false,
+    ...(selected.sceneMode === '2d' && sceneMode2D !== undefined
+      ? { sceneMode: sceneMode2D }
+      : {}),
     contextOptions: {
       webgl: {
         preserveDrawingBuffer: selected.preserveDrawingBuffer,
-        ...(['mobile', 'safe'].includes(selected.id)
+        ...(['mobile', 'minimal'].includes(selected.id)
           ? { powerPreference: 'low-power' }
           : {}),
       },
@@ -258,11 +477,7 @@ export function applyRendererProfile(viewer, profile, {
   return true;
 }
 
-function nextProfile(current, error) {
-  const message = String(error?.message || error || '');
-  if (/atmosphere|computeAtmosphereScattering|\\bMSL\\b/i.test(message)) {
-    if (current.id === 'high' || current.id === 'balanced') return RENDERER_PROFILES.mobile;
-  }
+export function nextRendererProfile(current) {
   const index = PROFILE_ORDER.indexOf(current.id);
   return index >= 0 && index < PROFILE_ORDER.length - 1
     ? RENDERER_PROFILES[PROFILE_ORDER[index + 1]]
@@ -270,8 +485,14 @@ function nextProfile(current, error) {
 }
 
 export function isShaderCompatibilityError(error) {
-  return /shader|program failed to link|compile|\\bMSL\\b|\\bANGLE\\b|computeAtmosphereScattering/i
+  return /shader|program failed to link|compile|\bMSL\b|\bANGLE\b|computeAtmosphereScattering/i
     .test(String(error?.message || error || ''));
+}
+
+export function isRendererStartupError(error) {
+  return isShaderCompatibilityError(error)
+    || /webgl|graphics context|framebuffer|post-process|post process|renderer initialization/i
+      .test(String(error?.message || error || ''));
 }
 
 /**
@@ -282,49 +503,72 @@ export function createRendererRecovery(viewer, {
   applyProfile = (profile) => applyRendererProfile(viewer, profile),
   onStatus = () => {},
   recreateProfile = () => false,
+  prepareProfile = (profile) => profile,
   development = false,
   setTimer = globalThis.setTimeout,
 } = {}) {
   if (!viewer?.scene?.renderError?.addEventListener) {
     throw new TypeError('Renderer recovery requires scene.renderError');
   }
-  let profile = initialProfile || RENDERER_PROFILES.safe;
+  let profile = initialProfile || RENDERER_PROFILES.minimal;
   let destroyed = false;
   let exhausted = false;
   let recoveryPending = false;
   const schedule = (...args) => setTimer(...args);
 
-  const removeListener = viewer.scene.renderError.addEventListener((scene, error) => {
-    if (destroyed || exhausted || recoveryPending) return;
-    if (!isShaderCompatibilityError(error)) {
-      exhausted = true;
-      onStatus({ state: 'failed', profile: profile.id, error });
-      if (development) console.error('[Renderer] Non-shader render failure:', error);
-      return;
+  const publishStatus = (status) => {
+    try {
+      onStatus(status);
+    } catch (error) {
+      if (development) console.warn('[Renderer] Status listener failed:', error);
     }
-    const fallback = nextProfile(profile, error);
-    if (!fallback) {
+  };
+
+  const negotiate = (scene, error) => {
+    if (destroyed || exhausted || recoveryPending) return;
+    const candidate = nextRendererProfile(profile);
+    if (!candidate) {
       exhausted = true;
-      onStatus({ state: 'failed', profile: profile.id, error });
+      publishStatus({ state: 'failed', profile: profile.id, error });
       if (development) console.error('[Renderer] Compatibility fallback exhausted:', error);
       return;
     }
     recoveryPending = true;
     const previousProfile = profile;
-    profile = fallback;
-    onStatus({ state: 'recovering', profile: profile.id, error });
-    if (development) {
-      console.warn(`[Renderer] Falling back to ${profile.id}:`, error);
-    }
-    applyProfile(profile);
-    if (recreateProfile(profile, previousProfile) === true) return;
-    schedule(() => {
-      if (destroyed) return;
-      viewer.useDefaultRenderLoop = true;
-      scene.requestRender?.();
+    profile = candidate;
+    try {
+      profile = prepareProfile(candidate, previousProfile) || candidate;
+      publishStatus({
+        state: 'recovering',
+        profile: profile.id,
+        previousProfile: previousProfile.id,
+        error,
+      });
+      if (development) {
+        console.warn(`[Renderer] Falling back to ${profile.id}:`, error);
+      }
+      if (recreateProfile(profile, previousProfile) === true) return;
+      applyProfile(profile);
+      schedule(() => {
+        if (destroyed) return;
+        try {
+          viewer.useDefaultRenderLoop = true;
+          scene.requestRender?.();
+          recoveryPending = false;
+          publishStatus({ state: 'restarted', profile: profile.id, error: null });
+        } catch (restartError) {
+          recoveryPending = false;
+          negotiate(scene, restartError);
+        }
+      }, 0);
+    } catch (fallbackError) {
       recoveryPending = false;
-      onStatus({ state: 'restarted', profile: profile.id, error: null });
-    }, 0);
+      negotiate(scene, fallbackError);
+    }
+  };
+
+  const removeListener = viewer.scene.renderError.addEventListener((scene, error) => {
+    negotiate(scene, error);
   });
 
   return Object.freeze({
