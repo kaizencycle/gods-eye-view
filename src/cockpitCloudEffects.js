@@ -160,6 +160,23 @@ export function cockpitWeatherEnabledFromStoredValue(value) {
   return value === '1';
 }
 
+export function cockpitWeatherRendererAllowed(compatibilityLocked) {
+  return compatibilityLocked !== true;
+}
+
+export function cockpitWeatherControlState(enabled, available = true) {
+  const usable = available !== false;
+  const active = usable && enabled === true;
+  return {
+    active,
+    disabled: !usable,
+    label: usable
+      ? `${active ? 'Disable' : 'Enable'} cockpit weather effects`
+      : 'Cockpit weather effects unavailable in compatibility renderer',
+    value: usable ? (active ? 'ON' : 'OFF') : 'UNAVAILABLE',
+  };
+}
+
 /**
  * Weather-backed volumetric cloud pass that exists only while cockpit mode is
  * active. It owns no Cesium fog/post-process stages and cannot affect map mode.
@@ -190,6 +207,7 @@ export class CockpitCloudEffectsController {
     this.pending = null;
     this.abort = null;
     this.destroyed = false;
+    this.compatibilityLocked = false;
     this.reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     this.enabled = this.readEnabledPreference();
 
@@ -221,12 +239,20 @@ export class CockpitCloudEffectsController {
 
   emitEnabledState() {
     window.dispatchEvent(new CustomEvent('gev:cockpit-weather-state', {
-      detail: { enabled: this.enabled },
+      detail: {
+        enabled: this.enabled,
+        available: cockpitWeatherRendererAllowed(this.compatibilityLocked),
+      },
     }));
   }
 
   setEnabled(enabled) {
     const next = !!enabled;
+    if (next && !cockpitWeatherRendererAllowed(this.compatibilityLocked)) {
+      this.stop();
+      this.emitEnabledState();
+      return false;
+    }
     this.enabled = next;
     try {
       localStorage.setItem(WEATHER_ENABLED_STORAGE_KEY, next ? '1' : '0');
@@ -237,11 +263,38 @@ export class CockpitCloudEffectsController {
       this.start();
     }
     this.emitEnabledState();
+    return true;
+  }
+
+  lockCompatibility() {
+    if (this.compatibilityLocked) return;
+    this.compatibilityLocked = true;
+    this.stop();
+    this.releaseRenderer();
+    this.canvas.dataset.status = 'compatibility-disabled';
+    this.emitEnabledState();
+  }
+
+  releaseRenderer() {
+    if (this.program && this.gl) this.gl.deleteProgram(this.program);
+    this.program = null;
+    this.locations = null;
+    try {
+      this.gl?.getExtension?.('WEBGL_lose_context')?.loseContext?.();
+    } catch {
+      // Context loss is a best-effort resource release.
+    }
+    this.gl = null;
   }
 
   initializeRenderer() {
+    if (!cockpitWeatherRendererAllowed(this.compatibilityLocked)) return;
+    let gl = null;
+    let vertexShader = null;
+    let fragmentShader = null;
+    let program = null;
     try {
-      const gl = this.canvas.getContext('webgl', {
+      gl = this.canvas.getContext('webgl', {
         alpha: true,
         antialias: false,
         depth: false,
@@ -252,14 +305,16 @@ export class CockpitCloudEffectsController {
       });
       if (!gl) throw new Error('WebGL unavailable');
 
-      const vertexShader = compileShader(gl, gl.VERTEX_SHADER, VERTEX_SHADER);
-      const fragmentShader = compileShader(gl, gl.FRAGMENT_SHADER, FRAGMENT_SHADER);
-      const program = gl.createProgram();
+      vertexShader = compileShader(gl, gl.VERTEX_SHADER, VERTEX_SHADER);
+      fragmentShader = compileShader(gl, gl.FRAGMENT_SHADER, FRAGMENT_SHADER);
+      program = gl.createProgram();
       gl.attachShader(program, vertexShader);
       gl.attachShader(program, fragmentShader);
       gl.linkProgram(program);
       gl.deleteShader(vertexShader);
+      vertexShader = null;
       gl.deleteShader(fragmentShader);
+      fragmentShader = null;
       if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
         throw new Error(gl.getProgramInfoLog(program) || 'Cloud shader link failed');
       }
@@ -283,8 +338,20 @@ export class CockpitCloudEffectsController {
         wind: gl.getUniformLocation(program, 'uWind'),
       };
     } catch (error) {
-      console.warn('[Cockpit clouds] Renderer unavailable:', error);
-      this.canvas.dataset.status = 'unavailable';
+      if (vertexShader && gl) gl.deleteShader(vertexShader);
+      if (fragmentShader && gl) gl.deleteShader(fragmentShader);
+      if (program && gl) gl.deleteProgram(program);
+      try {
+        gl?.getExtension?.('WEBGL_lose_context')?.loseContext?.();
+      } catch {
+        // Failed renderer owns no reusable resources.
+      }
+      if (import.meta.env?.DEV) {
+        console.warn('[Cockpit clouds] Renderer unavailable:', error);
+      } else {
+        console.warn('[Cockpit clouds] Renderer unavailable');
+      }
+      this.lockCompatibility();
     }
   }
 
@@ -311,7 +378,8 @@ export class CockpitCloudEffectsController {
   }
 
   start() {
-    if (this.destroyed || !this.enabled || this.frame !== null || this.suspended) return;
+    if (this.destroyed || this.compatibilityLocked
+      || !this.enabled || this.frame !== null || this.suspended) return;
     if (!this.gl) {
       this.initializeRenderer();
       this.resize();
@@ -520,7 +588,7 @@ export class CockpitCloudEffectsController {
     window.removeEventListener('resize', this.onResize);
     window.removeEventListener('gev:cockpit-mode-changed', this.onCockpitMode);
     window.removeEventListener('gev:cockpit-weather-toggle', this.onEnabledChange);
-    if (this.program && this.gl) this.gl.deleteProgram(this.program);
+    this.releaseRenderer();
     this.canvas.remove();
   }
 }

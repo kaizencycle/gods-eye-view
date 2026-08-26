@@ -15,6 +15,11 @@ import {
 import { LOCATIONS, CITY_POIS, GLOBE_VIEW, flyToGlobeView, flyToPresetLocation, flyToPOI, searchAndFlyTo } from './locations.js';
 import { locationMiniStatus } from './locationStatus.js';
 import { interruptCameraMotion } from './cameraVerbs.js';
+import { cockpitWeatherControlState } from './cockpitCloudEffects.js';
+import {
+  rendererFogEnabled,
+  rendererPostProcessingAllowed,
+} from './rendererCompatibility.js';
 import {
   aircraftTrackingTarget,
   enterCockpitWithTracking,
@@ -818,7 +823,9 @@ class CockpitViewController {
       }));
     });
     this._listen(window, 'gev:cockpit-weather-state', (event) => {
-      this.syncWeatherToggle(event?.detail?.enabled !== false);
+      this.syncWeatherToggle(event?.detail?.enabled !== false, {
+        available: event?.detail?.available !== false,
+      });
     });
     this._listen(this.signalToggle, 'click', () => this.setSignalCollapsed(
       !this.signalCollapsed,
@@ -856,16 +863,15 @@ class CockpitViewController {
     this._listenerRemovers.push(() => target.removeEventListener(type, handler, options));
   }
 
-  syncWeatherToggle(enabled) {
+  syncWeatherToggle(enabled, { available = true } = {}) {
     if (!this.weatherToggle) return;
-    const active = !!enabled;
-    this.weatherToggle.setAttribute('aria-pressed', String(active));
-    this.weatherToggle.setAttribute(
-      'aria-label',
-      `${active ? 'Disable' : 'Enable'} cockpit weather effects`,
-    );
-    this.weatherToggle.title = `${active ? 'Disable' : 'Enable'} cockpit weather effects`;
-    if (this.weatherState) this.weatherState.textContent = active ? 'ON' : 'OFF';
+    const state = cockpitWeatherControlState(enabled, available);
+    this.weatherToggle.disabled = state.disabled;
+    this.weatherToggle.setAttribute('aria-pressed', String(state.active));
+    this.weatherToggle.setAttribute('aria-disabled', String(state.disabled));
+    this.weatherToggle.setAttribute('aria-label', state.label);
+    this.weatherToggle.title = state.label;
+    if (this.weatherState) this.weatherState.textContent = state.value;
   }
 
   readAircraftInfo() {
@@ -2115,9 +2121,10 @@ export class StyleManager {
    * @param {Cesium.Viewer} viewer - The CesiumJS viewer instance.
    * @param {object} [options]
    */
-  constructor(viewer, { mapStackController = null } = {}) {
+  constructor(viewer, { mapStackController = null, rendererProfile = null } = {}) {
     this.viewer = viewer;
     this.mapStackController = mapStackController;
+    this.rendererProfile = rendererProfile;
     this.stages = {};
     this.activeStyle = 'normal';
     document.documentElement.dataset.gevStyle = this.activeStyle;
@@ -2616,6 +2623,7 @@ export class StyleManager {
     this._initStages();
     this._initBloomSharpen();
     this._initUI();
+    this.applyRendererProfile(this.rendererProfile);
     this._initMapStackControl();
     this._initPanelChrome();
     this._initLeftPanelAdaptiveLayout();
@@ -2993,8 +3001,9 @@ export class StyleManager {
    */
   _setStageIntensity(stage, value) {
     if (!stage) return;
-    stage.uniforms.intensity = value;
-    stage.enabled = value > 0.001;
+    const allowed = rendererPostProcessingAllowed(this.rendererProfile);
+    stage.uniforms.intensity = allowed ? value : 0;
+    stage.enabled = allowed && value > 0.001;
     // An animated shader becoming visible needs the style loop (its clock)
     // running again; the loop self-stops when nothing visible animates.
     if (stage.enabled && stage.uniforms.time !== undefined) this._startAnimationLoop();
@@ -3141,7 +3150,10 @@ export class StyleManager {
         this._irFogWasEnabled = scene.fog.enabled;
         scene.fog.enabled = false;
       } else if (this._irFogWasEnabled != null) {
-        scene.fog.enabled = this._irFogWasEnabled;
+        scene.fog.enabled = rendererFogEnabled(
+          this.rendererProfile,
+          this._irFogWasEnabled,
+        );
         this._irFogWasEnabled = null;
       }
       scene.requestRender?.();
@@ -3220,7 +3232,9 @@ export class StyleManager {
   _syncBloomStageEnabled() {
     if (!this._bloomStage) return;
     const strength = bloomStrengthFromIntensity(this._getBloomIntensity());
-    this._bloomStage.enabled = this.bloomEnabled && strength > 0.06;
+    this._bloomStage.enabled = rendererPostProcessingAllowed(this.rendererProfile)
+      && this.bloomEnabled
+      && strength > 0.06;
   }
 
   /**
@@ -3272,7 +3286,7 @@ export class StyleManager {
    */
   _setBloomEnabled(enabled) {
     governorRequestRender('bloom');
-    this.bloomEnabled = !!enabled;
+    this.bloomEnabled = rendererPostProcessingAllowed(this.rendererProfile) && !!enabled;
     this._syncBloomStageEnabled();
     this._bloomBtn.classList.toggle('active', this.bloomEnabled);
     this._bloomSliderRow.classList.toggle('visible', this.bloomEnabled);
@@ -3302,7 +3316,7 @@ export class StyleManager {
    */
   _setSharpenEnabled(enabled) {
     governorRequestRender('sharpen');
-    this.sharpenEnabled = !!enabled;
+    this.sharpenEnabled = rendererPostProcessingAllowed(this.rendererProfile) && !!enabled;
     this._sharpenStage.enabled = this.sharpenEnabled;
     this._sharpenBtn.classList.toggle('active', this.sharpenEnabled);
     if (this._sharpenSliderRow) {
@@ -8974,6 +8988,53 @@ export class StyleManager {
     }));
   }
 
+  /**
+   * Apply renderer compatibility limits to every post-processing entry point.
+   * Mobile/safe profiles keep the optical Normal style and reject later
+   * preset, voice, share-link, and cockpit attempts to re-enable GPU stages.
+   */
+  applyRendererProfile(profile) {
+    if (!profile) return;
+    this.rendererProfile = profile;
+    const allowed = rendererPostProcessingAllowed(profile);
+    document.documentElement.dataset.rendererProfile = profile.id;
+    if (!allowed) {
+      this.transitions.clear();
+      for (const stage of Object.values(this.stages)) {
+        stage.uniforms.intensity = 0;
+        stage.enabled = false;
+      }
+      this.bloomEnabled = false;
+      this.sharpenEnabled = false;
+      if (this._bloomStage) this._bloomStage.enabled = false;
+      if (this._sharpenStage) this._sharpenStage.enabled = false;
+      this._bloomBtn?.classList.remove('active');
+      this._sharpenBtn?.classList.remove('active');
+      this._bloomSliderRow?.classList.remove('visible');
+      this._sharpenSliderRow?.classList.remove('visible');
+      if (this.activeStyle !== 'normal') {
+        this.setStyle('normal', {
+          applyPreset: false,
+          revealParameters: false,
+          restore: true,
+        });
+      }
+    }
+    for (const button of document.querySelectorAll('.style-btn')) {
+      button.dataset.rendererOriginalTitle ||= button.title || button.textContent || 'Visual style';
+      button.disabled = !allowed && button.dataset.style !== 'normal';
+      button.title = button.disabled
+        ? `${button.dataset.rendererOriginalTitle} · unavailable in ${profile.id} renderer`
+        : button.dataset.rendererOriginalTitle;
+    }
+    for (const button of [this._bloomBtn, this._sharpenBtn]) {
+      if (!button) continue;
+      button.disabled = !allowed;
+      button.setAttribute('aria-disabled', String(!allowed));
+    }
+    this.viewer.scene.requestRender?.();
+  }
+
   // ── Style switching ───────────────────────────
 
   /**
@@ -8992,6 +9053,7 @@ export class StyleManager {
     revealParameters = applyPreset,
     restore = false,
   } = {}) {
+    if (!rendererPostProcessingAllowed(this.rendererProfile) && styleName !== 'normal') return;
     if (!restore) this.shareLinkManager?.claimRestoreLane?.('visual');
     if (styleName === this.activeStyle) {
       if (revealParameters && styleName !== 'normal') this._revealStyleParameters();
@@ -10167,7 +10229,10 @@ export class StyleManager {
     // manager doesn't inherit sensor state (review P2, 2026-08-16).
     if (this._irBoostActive) {
       if (this._irFogWasEnabled != null && this.viewer?.scene?.fog) {
-        this.viewer.scene.fog.enabled = this._irFogWasEnabled;
+        this.viewer.scene.fog.enabled = rendererFogEnabled(
+          this.rendererProfile,
+          this._irFogWasEnabled,
+        );
       }
       this._dataManager?.setLayerParams('flights', { irBoost: false });
       this._dataManager?.setLayerParams('military', { irBoost: false });

@@ -45,6 +45,15 @@ import {
 } from './renderGovernor.js';
 import { installScopeMask } from './scopeMask.js';
 import { initFirstRunExperience } from './firstRunExperience.js';
+import {
+  applyRendererProfile,
+  createRendererRecovery,
+  isShaderCompatibilityError,
+  probeRendererCapabilities,
+  rendererProfileOverride,
+  rendererViewerOptions,
+  selectRendererProfile,
+} from './rendererCompatibility.js';
 
 initLogoGaze();
 
@@ -87,9 +96,20 @@ async function init() {
   let instrumentPanel = null;
   let destroyTerminalIntegration = null;
   let terminalPageHideHandler = null;
+  let rendererRecovery = null;
+  let rendererProfile = null;
+  let rendererStatusHideTimer = null;
+  let rendererTerminalFailure = false;
+  let tileset = null;
+  let styleManager = null;
+  let cockpitCloudEffects = null;
+  const updateLoaderStatus = (message, { force = false } = {}) => {
+    if (rendererTerminalFailure && !force) return;
+    loaderStatus.textContent = message;
+  };
 
   try {
-    loaderStatus.textContent = 'Configuring viewer...';
+    updateLoaderStatus('Configuring viewer...');
 
     // Set Cesium Ion token for World Terrain
     const cesiumToken = import.meta.env.CESIUM_ION_TOKEN;
@@ -107,6 +127,13 @@ async function init() {
     // Expose API key globally for geocoding in locations.js
     window.__GOOGLE_MAPS_API_KEY__ = googleApiKey;
 
+    const rendererCapabilities = probeRendererCapabilities();
+    rendererProfile = selectRendererProfile(
+      rendererCapabilities,
+      rendererProfileOverride(),
+    );
+    const viewerProfileOptions = rendererViewerOptions(rendererProfile);
+
     // Create the Cesium viewer with minimal chrome
     const viewer = new Cesium.Viewer('cesiumContainer', {
       timeline: false,
@@ -121,6 +148,7 @@ async function init() {
       selectionIndicator: false,
       infoBox: false,
       baseLayer: false,
+      ...viewerProfileOptions,
       // Visible attribution container — Google Maps / 3D Tiles credits are
       // required by Google's Terms of Service, so they must be shown (styled
       // subtly via #cesium-credits). The credit line stays visible in
@@ -134,22 +162,43 @@ async function init() {
         document.body.appendChild(el);
         return el;
       })(),
-      msaaSamples: 4,
-      contextOptions: {
-        webgl: {
-          preserveDrawingBuffer: true,
-        },
-      },
     });
 
-    // Cap the default render loop at 60 fps. Cesium's loop otherwise runs at
-    // the display's refresh rate — 120 Hz on ProMotion panels — doubling GPU
-    // and CPU burn for zero visual benefit in a map app whose animation
-    // cadences (poll interpolation, trail fades, style crossfades) are all
-    // designed against wall-clock time, not frame count. Measured on the
-    // 2026-08-05 perf investigation as a strict halving of idle burn on
-    // 120 Hz hardware; a no-op on 60 Hz displays. (perf item 2)
-    viewer.targetFrameRate = 60;
+    applyRendererProfile(viewer, rendererProfile);
+    const rendererStatus = document.getElementById('renderer-compat-status');
+    const reportRendererStatus = ({ state, profile }) => {
+      if (!rendererStatus) return;
+      clearTimeout(rendererStatusHideTimer);
+      rendererStatus.dataset.state = state;
+      rendererStatus.hidden = false;
+      if (state === 'recovering') {
+        rendererStatus.textContent = 'Renderer initialization failed. Attempting compatibility mode…';
+        updateLoaderStatus(rendererStatus.textContent);
+      } else if (state === 'restarted') {
+        rendererStatus.textContent = `Renderer restarted in ${profile} compatibility mode.`;
+        rendererStatusHideTimer = setTimeout(() => {
+          rendererStatus.hidden = true;
+        }, 4_000);
+      } else {
+        rendererTerminalFailure = true;
+        rendererStatus.textContent = 'Renderer compatibility mode could not recover this GPU.';
+        updateLoaderStatus(rendererStatus.textContent, { force: true });
+        loaderStatus.style.color = '#ff8f94';
+      }
+    };
+    rendererRecovery = createRendererRecovery(viewer, {
+      initialProfile: rendererProfile,
+      applyProfile: (nextProfile) => {
+        rendererProfile = nextProfile;
+        applyRendererProfile(viewer, nextProfile, {
+          tileset,
+          styleManager,
+        });
+        if (!nextProfile.postProcessing) cockpitCloudEffects?.lockCompatibility();
+      },
+      onStatus: reportRendererStatus,
+      development: import.meta.env.DEV,
+    });
 
     // Register per-layer data attribution into the "Data attribution" popover.
     // Required by each source's license (ODbL, CC BY-NC-SA, NASA FIRMS, etc.);
@@ -166,31 +215,33 @@ async function init() {
     // Keep a sky behind Google 3D Tiles, but soften Cesium's high-intensity
     // default atmosphere. With the globe hidden its bright limb otherwise
     // reads as a hard cyan seam where distant photoreal tiles meet the sky.
-    viewer.scene.skyAtmosphere.show = true;
-    viewer.scene.skyAtmosphere.atmosphereLightIntensity = 18;
-    viewer.scene.skyAtmosphere.saturationShift = -0.12;
-    viewer.scene.skyAtmosphere.brightnessShift = -0.08;
+    if (viewer.scene.skyAtmosphere && rendererProfile.atmosphere) {
+      viewer.scene.skyAtmosphere.show = true;
+      viewer.scene.skyAtmosphere.atmosphereLightIntensity = 18;
+      viewer.scene.skyAtmosphere.saturationShift = -0.12;
+      viewer.scene.skyAtmosphere.brightnessShift = -0.08;
+    }
 
-    loaderStatus.textContent = 'Loading Google 3D Tiles...';
-    let tileset = null;
+    updateLoaderStatus('Loading Google 3D Tiles...');
     try {
       // Load Google Photorealistic 3D Tiles
       tileset = await Cesium.createGooglePhotorealistic3DTileset({
         onlyUsingWithGoogleGeocoder: true,
       });
       viewer.scene.primitives.add(tileset);
+      applyRendererProfile(viewer, rendererProfile, { tileset });
       // NOTE: Cesium World Terrain intentionally disabled — conflicts with Google 3D Tiles at high zoom.
       // Google Photorealistic 3D Tiles provide their own terrain/elevation.
       viewer.scene.globe.show = false;
     } catch (tileError) {
       console.warn('[Init] Google 3D Tiles unavailable, falling back to Cesium globe:', tileError);
       const tileErrorDetail = describeError(tileError);
-      loaderStatus.textContent = `Google 3D Tiles unavailable (${tileErrorDetail}). Continuing in fallback mode...`;
+      updateLoaderStatus(`Google 3D Tiles unavailable (${tileErrorDetail}). Continuing in fallback mode...`);
       // Keep Cesium globe visible as fallback instead of aborting the app.
       viewer.scene.globe.show = true;
     }
 
-    loaderStatus.textContent = 'Initializing systems...';
+    updateLoaderStatus('Initializing systems...');
 
     const mapStackController = new MapStackController(viewer, {
       googleTileset: tileset,
@@ -209,19 +260,29 @@ async function init() {
     await mapStackController.setStack(tileset ? 'photoreal' : 'osm', { silent: true });
 
     // Initialize the style manager (post-processing, HUD, locations, share links)
-    const styleManager = new StyleManager(viewer, { mapStackController });
+    styleManager = new StyleManager(viewer, {
+      mapStackController,
+      rendererProfile,
+    });
     // The previous multi-canvas weather compositor remains disabled. Cockpit
     // clouds use a separate, capped low-resolution GPU pass that never attaches
     // Cesium fog or post-process stages and is fully stopped in map mode.
     const weatherEffects = null;
-    const cockpitCloudEffects = initCockpitCloudEffects(viewer);
+    cockpitCloudEffects = rendererProfile.postProcessing
+      ? initCockpitCloudEffects(viewer)
+      : null;
+    if (!cockpitCloudEffects) {
+      window.dispatchEvent(new CustomEvent('gev:cockpit-weather-state', {
+        detail: { enabled: false, available: false },
+      }));
+    }
 
     // If no share link state, do default fly-to Austin
     if (!styleManager.hasShareState) {
-      loaderStatus.textContent = 'Flying to Austin, TX...';
+      updateLoaderStatus('Flying to Austin, TX...');
       flyToAustin(viewer);
     } else {
-      loaderStatus.textContent = 'Restoring shared view...';
+      updateLoaderStatus('Restoring shared view...');
     }
 
     // Initialize data layer manager
@@ -327,6 +388,7 @@ async function init() {
       styleManager.initialRestorePromise,
       new Promise((resolve) => setTimeout(resolve, 1000)),
     ]).finally(() => {
+      if (rendererTerminalFailure) return;
       loadingScreen.classList.add('hidden');
       // Reveal only after the loading cover has yielded. transitionend can be
       // absent under reduced motion, so a bounded fallback makes this reliable.
@@ -368,7 +430,7 @@ async function init() {
     // the loop, refresh the one DOM surface we gated, render a frame.
     const syncVisibilitySuspension = () => {
       const hidden = document.hidden;
-      viewer.useDefaultRenderLoop = !hidden;
+      viewer.useDefaultRenderLoop = !hidden && rendererRecovery?.canRestart() !== false;
       cockpitCloudEffects?.setSuspended?.(hidden);
       if (!hidden) {
         if (dataManager._panelRefreshPendingOnVisible) {
@@ -398,6 +460,8 @@ async function init() {
       instrumentPanel,
       weatherEffects,
       cockpitCloudEffects,
+      rendererCapabilities,
+      getRendererProfile: () => rendererRecovery?.getProfile?.() || rendererProfile,
       getRenderGovernorDiagnostics,
       requestRender: governorRequestRender,
     };
@@ -405,8 +469,17 @@ async function init() {
 
   } catch (error) {
     destroyTerminalIntegration?.();
-    console.error("God's Eye View initialization failed:", error);
-    loaderStatus.textContent = `Error: ${describeError(error)}`;
+    rendererRecovery?.destroy();
+    clearTimeout(rendererStatusHideTimer);
+    if (import.meta.env.DEV) {
+      console.error("God's Eye View initialization failed:", error);
+    } else {
+      console.error("God's Eye View initialization failed");
+    }
+    rendererTerminalFailure = true;
+    updateLoaderStatus(isShaderCompatibilityError(error)
+      ? 'Renderer initialization failed. Compatibility mode could not start.'
+      : `Error: ${describeError(error)}`, { force: true });
     loaderStatus.style.color = '#ff4444';
   }
 }
