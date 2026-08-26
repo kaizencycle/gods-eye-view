@@ -92,6 +92,7 @@ function createAdapterFixture({ managerEnabled = false } = {}) {
     adapter,
     clicks,
     manager,
+    storage,
     warnings,
     setRecords(next) {
       records = structuredClone(next);
@@ -125,7 +126,7 @@ test('successful earthquake visibility snapshots records for click capture', asy
 
   const packetIds = fixture.adapter.listPacketIds();
   assert.equal(packetIds.length, 1);
-  const packet = fixture.adapter.readPacket(packetIds[0]);
+  const packet = await fixture.adapter.readPacket(packetIds[0]);
   assert.equal(packet.event_id, `usgs:${acceptedRecord.id}`);
   assert.equal(packet.properties.magnitude, acceptedRecord.magnitude);
   assert.equal(packet.location.latitude, acceptedRecord.lat);
@@ -143,6 +144,54 @@ test('attaching to an enabled layer does not trust records without a success eve
   await fixture.adapter.whenIdle();
 
   assert.deepEqual(fixture.adapter.listPacketIds(), []);
+});
+
+test('fallback event-N picks resolve to index-based analyst identities', async () => {
+  const fixture = createAdapterFixture();
+  fixture.setRecords([{ ...acceptedRecord, id: 'QUAKE-0000' }]);
+  fixture.setPickedId('earthquake:event-1');
+  emitSuccessfulEnable(fixture.manager);
+
+  fixture.clicks.click();
+  await fixture.adapter.whenIdle();
+
+  const [packetId] = fixture.adapter.listPacketIds();
+  const packet = await fixture.adapter.readPacket(packetId);
+  assert.equal(packet.event_id, 'usgs:QUAKE-0000');
+});
+
+test('an incomplete sibling does not block a valid accepted earthquake', async () => {
+  const fixture = createAdapterFixture();
+  fixture.setRecords([
+    { ...acceptedRecord, id: 'incomplete', magnitude: null },
+    acceptedRecord,
+  ]);
+  fixture.setPickedId(`earthquake:${acceptedRecord.id}`);
+  emitSuccessfulEnable(fixture.manager);
+
+  fixture.clicks.click();
+  await fixture.adapter.whenIdle();
+
+  assert.equal(fixture.adapter.listPacketIds().length, 1);
+  assert.match(fixture.warnings.join(' '), /ignored incomplete earthquake incomplete/i);
+});
+
+test('developer replay binds a packet to its requested storage key', async () => {
+  const fixture = createAdapterFixture();
+  emitSuccessfulEnable(fixture.manager);
+  fixture.clicks.click();
+  await fixture.adapter.whenIdle();
+  const [packetId] = fixture.adapter.listPacketIds();
+  const wrongKey = 'b'.repeat(64);
+  fixture.storage.setItem(
+    `epicon:v0.1:packet:${wrongKey}`,
+    fixture.adapter.readPacketJson(packetId),
+  );
+
+  const replay = await fixture.adapter.replay(wrongKey);
+
+  assert.equal(replay.valid, false);
+  assert.match(replay.errors.join(' '), /storage-key validation/i);
 });
 
 test('failed refresh cannot promote a partial displayed record', async () => {
@@ -183,7 +232,7 @@ test('successful refresh advances the accepted snapshot', async () => {
   await fixture.adapter.whenIdle();
 
   const [packetId] = fixture.adapter.listPacketIds();
-  assert.equal(fixture.adapter.readPacket(packetId).properties.magnitude, 6.3);
+  assert.equal((await fixture.adapter.readPacket(packetId)).properties.magnitude, 6.3);
 });
 
 test('non-earthquake picks are ignored', async () => {

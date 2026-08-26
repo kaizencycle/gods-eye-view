@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { createPacket } from '../packet/createPacket.js';
+import { serializePacket } from '../packet/serializePacket.js';
 import {
   createLocalPacketStore,
   EPICON_PACKET_INDEX_KEY,
@@ -32,7 +33,7 @@ test('local packet store saves and reads packet JSON by packet id', async () => 
 
   await store.save(packet);
 
-  assert.deepEqual(store.read(packet.packet_id), packet);
+  assert.deepEqual(await store.read(packet.packet_id), packet);
   assert.deepEqual(store.listPacketIds(), [packet.packet_id]);
   assert.match(storage.getItem(EPICON_PACKET_INDEX_KEY), /^\["/);
 });
@@ -61,7 +62,7 @@ test('local packet store uses an in-memory fallback outside a browser', async ()
 
   await store.save(packet);
 
-  assert.deepEqual(store.read(packet.packet_id), packet);
+  assert.deepEqual(await store.read(packet.packet_id), packet);
 });
 
 test('local packet store refuses a conflicting existing packet body', async () => {
@@ -91,7 +92,7 @@ test('local packet store falls back when a browser write fails', async () => {
 
   await store.save(packet);
 
-  assert.deepEqual(store.read(packet.packet_id), packet);
+  assert.deepEqual(await store.read(packet.packet_id), packet);
   assert.deepEqual(store.listPacketIds(), [packet.packet_id]);
 });
 
@@ -120,6 +121,34 @@ test('write fallback keeps earlier indexed packets readable', async () => {
   await store.save(second);
 
   assert.deepEqual(store.listPacketIds(), [first.packet_id, second.packet_id]);
-  assert.deepEqual(store.read(first.packet_id), first);
-  assert.deepEqual(store.read(second.packet_id), second);
+  assert.deepEqual(await store.read(first.packet_id), first);
+  assert.deepEqual(await store.read(second.packet_id), second);
+});
+
+test('validated read rejects a stored packet whose body was modified', async () => {
+  const storage = createMemoryStorage();
+  const store = createLocalPacketStore(storage);
+  const packet = await createPacket(observation);
+  await store.save(packet);
+  const modified = {
+    ...packet,
+    properties: { ...packet.properties, magnitude: 9.9 },
+  };
+  storage.setItem(
+    `epicon:v0.1:packet:${packet.packet_id}`,
+    serializePacket(modified),
+  );
+
+  assert.equal(await store.read(packet.packet_id), null);
+  assert.equal(typeof store.readJson(packet.packet_id), 'string');
+});
+
+test('validated read binds packet identity to the requested storage key', async () => {
+  const storage = createMemoryStorage();
+  const store = createLocalPacketStore(storage);
+  const packet = await createPacket(observation);
+  const wrongKey = 'a'.repeat(64);
+  storage.setItem(`epicon:v0.1:packet:${wrongKey}`, serializePacket(packet));
+
+  assert.equal(await store.read(wrongKey), null);
 });

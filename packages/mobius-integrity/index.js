@@ -52,6 +52,15 @@ function resolvePickedId(picked) {
   return null;
 }
 
+function resolveEarthquakeRecord(records, pickedEventId) {
+  const direct = records.find((record) => record?.id === pickedEventId);
+  if (direct) return direct;
+  const fallback = /^event-(\d+)$/.exec(pickedEventId);
+  if (!fallback) return null;
+  const index = Number(fallback[1]) - 1;
+  return Number.isSafeInteger(index) && index >= 0 ? records[index] || null : null;
+}
+
 function packetObservation(record, observedAt, sourceName) {
   return {
     eventId: record.id,
@@ -113,13 +122,25 @@ export function attachMobiusAdapter({
 
   const readCurrentRecords = () => {
     const records = source.getRecords();
-    return Array.isArray(records) ? records.map(normalizeEarthquakeRecord) : [];
+    if (!Array.isArray(records)) return [];
+    return records.map((record) => {
+      try {
+        return normalizeEarthquakeRecord(record);
+      } catch (error) {
+        logger.warn?.(
+          `[EPICON] Ignored incomplete earthquake ${record?.id || 'unknown'}: ${error.message}`,
+        );
+        return null;
+      }
+    });
   };
 
   const snapshotAcceptedRecords = () => {
     const records = readCurrentRecords();
     const next = new Map();
-    for (const record of records) next.set(record.id, recordFingerprint(record));
+    for (const record of records) {
+      if (record) next.set(record.id, recordFingerprint(record));
+    }
     acceptedRecords.clear();
     for (const [id, fingerprint] of next) acceptedRecords.set(id, fingerprint);
   };
@@ -179,8 +200,8 @@ export function attachMobiusAdapter({
     const pickedId = resolvePickedId(picked);
     if (!pickedId?.startsWith(EARTHQUAKE_PICK_PREFIX)) return null;
     const eventId = pickedId.slice(EARTHQUAKE_PICK_PREFIX.length);
-    const current = readCurrentRecords().find((record) => record.id === eventId);
-    if (!current || acceptedRecords.get(eventId) !== recordFingerprint(current)) {
+    const current = resolveEarthquakeRecord(readCurrentRecords(), eventId);
+    if (!current || acceptedRecords.get(current.id) !== recordFingerprint(current)) {
       logger.warn?.(
         `[EPICON] Earthquake ${eventId} is not in the last accepted snapshot; packet skipped`,
       );
@@ -217,7 +238,17 @@ export function attachMobiusAdapter({
     listPacketIds: () => packetStore.listPacketIds(),
     readPacket: (packetId) => packetStore.read(packetId),
     readPacketJson: (packetId) => packetStore.readJson(packetId),
-    replay: (packetId) => replayPacket(packetStore.readJson(packetId) || ''),
+    async replay(packetId) {
+      const packet = await packetStore.read(packetId);
+      if (!packet) {
+        return {
+          packet: null,
+          valid: false,
+          errors: ['Stored packet failed fingerprint or storage-key validation'],
+        };
+      }
+      return replayPacket(serializePacket(packet));
+    },
     whenIdle: () => pendingCapture,
     dispose() {
       if (disposed) return;

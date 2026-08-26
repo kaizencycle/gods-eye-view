@@ -72,6 +72,11 @@ The adapter registers earthquake pick ownership so other layer handlers do not
 misclassify an earthquake click as empty space. It does not move the camera,
 select a Cesium entity, or alter any rendered object.
 
+Incomplete analyst records are excluded individually rather than invalidating
+valid siblings. When USGS omits its event ID, the renderer's `event-N` fallback
+pick is resolved to the analyst projection's same-position `QUAKE-NNNN`
+identity before accepted-snapshot comparison.
+
 ## Fingerprint rules
 
 `packages/mobius-integrity/hashing/computeFingerprint.js` defines canonical
@@ -123,7 +128,7 @@ After enabling Earthquakes and clicking a rendered earthquake, use:
 ```js
 const epicon = window.__godsEyeView.mobiusAdapter;
 const [packetId] = epicon.listPacketIds();
-epicon.readPacket(packetId);
+await epicon.readPacket(packetId);
 epicon.readPacketJson(packetId);
 await epicon.replay(packetId);
 ```
@@ -139,6 +144,10 @@ Replay parses the JSON, validates the v0.1 shape, removes the two identity
 fields, recomputes SHA-256 from the canonical body, and requires both
 `packet_id` and `fingerprint` to match. Replay does not render historical globe
 state or claim that an old observation is live.
+
+`readPacket()` performs the same fingerprint check and also requires the
+packet's ID to match the requested storage key. `readPacketJson()` is the
+explicitly unvalidated raw-JSON inspection path.
 
 ## Public functions
 

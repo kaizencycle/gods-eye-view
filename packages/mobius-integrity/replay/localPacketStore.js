@@ -120,11 +120,14 @@ export function createLocalPacketStore(storage = safeLocalStorage()) {
       return packet.packet_id;
     },
 
-    read(packetId) {
-      const serialized = getItem(packetStorageKey(String(packetId || '')));
+    async read(packetId) {
+      const requestedId = String(packetId || '');
+      const serialized = getItem(packetStorageKey(requestedId));
       if (!serialized) return null;
       try {
-        return assertPacket(deserializePacket(serialized));
+        const packet = assertPacket(deserializePacket(serialized));
+        if (packet.packet_id !== requestedId) return null;
+        return await validateFingerprint(packet) ? packet : null;
       } catch {
         return null;
       }
