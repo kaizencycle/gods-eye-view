@@ -1,0 +1,106 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://mobius.local/schema/epicon-packet-v0.1.json",
+  "title": "EPICON Evidence Packet v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "packet_id",
+    "fingerprint",
+    "packet_version",
+    "event_id",
+    "event_type",
+    "timestamp",
+    "source",
+    "renderer",
+    "location",
+    "properties",
+    "freshness",
+    "confidence"
+  ],
+  "properties": {
+    "packet_id": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "fingerprint": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "packet_version": {
+      "const": "0.1"
+    },
+    "event_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "event_type": {
+      "const": "earthquake"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "source": {
+      "type": "string",
+      "minLength": 1
+    },
+    "renderer": {
+      "const": "gods-eye-view"
+    },
+    "location": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "latitude",
+        "longitude",
+        "depth_km"
+      ],
+      "properties": {
+        "latitude": {
+          "type": "number",
+          "minimum": -90,
+          "maximum": 90
+        },
+        "longitude": {
+          "type": "number",
+          "minimum": -180,
+          "maximum": 180
+        },
+        "depth_km": {
+          "type": "number"
+        }
+      }
+    },
+    "properties": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "magnitude",
+        "source_id"
+      ],
+      "properties": {
+        "magnitude": {
+          "type": "number"
+        },
+        "source_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "place": {
+          "type": "string"
+        },
+        "source_timestamp": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "freshness": {
+      "const": "unassessed"
+    },
+    "confidence": {
+      "const": "unassessed"
+    }
+  }
+}

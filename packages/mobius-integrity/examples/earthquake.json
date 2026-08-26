@@ -1,0 +1,23 @@
+{
+  "packet_version": "0.1",
+  "event_id": "usgs:us7000abc1",
+  "event_type": "earthquake",
+  "timestamp": "2026-08-25T14:32:00.000Z",
+  "source": "USGS",
+  "renderer": "gods-eye-view",
+  "location": {
+    "latitude": 37.8,
+    "longitude": -122.4,
+    "depth_km": 8.5
+  },
+  "properties": {
+    "magnitude": 5.2,
+    "source_id": "us7000abc1",
+    "place": "San Francisco Bay Area",
+    "source_timestamp": "2026-08-25T14:30:00.000Z"
+  },
+  "freshness": "unassessed",
+  "confidence": "unassessed",
+  "packet_id": "73e85141f7906942f5d5e79a8f1c1f9ea45acf17b756576afddb7fe65ef4c7ca",
+  "fingerprint": "73e85141f7906942f5d5e79a8f1c1f9ea45acf17b756576afddb7fe65ef4c7ca"
+}
