@@ -105,7 +105,7 @@ available where their geometry supports 2D.
 If WebGL2 cannot be created or `minimal` still fails, World mounts a DOM
 fallback:
 
-- OpenStreetMap embed centered on Austin
+- Global OpenStreetMap embed
 - Search links to OpenStreetMap
 - Context describing renderer status and diagnostics
 - Links to reload each supported renderer tier

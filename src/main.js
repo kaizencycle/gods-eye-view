@@ -1,6 +1,12 @@
 import * as Cesium from 'cesium';
 import { StyleManager } from './ui.js';
-import { flyToAustin } from './camera.js';
+import {
+  applyCameraSession,
+  attachCameraSessionPersistence,
+  chooseInitialCamera,
+  readCameraSession,
+} from './cameraState.js';
+import { setDefaultGlobeView } from './locations.js';
 import { DataLayerManager } from './data/manager.js';
 import flightsLayer from './data/flights.js';
 import militaryFlightsLayer from './data/militaryFlights.js';
@@ -113,6 +119,8 @@ async function init() {
   let tileset = null;
   let styleManager = null;
   let cockpitCloudEffects = null;
+  let cameraSessionPersistence = null;
+  let cameraPageHideHandler = null;
   const updateLoaderStatus = (message, { force = false } = {}) => {
     if (rendererTerminalFailure && !force) return;
     loaderStatus.textContent = message;
@@ -377,13 +385,38 @@ async function init() {
       }));
     }
 
-    // If no share link state, do default fly-to Austin
-    if (!styleManager.hasShareState) {
-      updateLoaderStatus('Flying to Austin, TX...');
-      flyToAustin(viewer);
+    const initialCamera = chooseInitialCamera({
+      shareState: styleManager.hasShareState ? { present: true } : null,
+      savedState: readCameraSession(),
+    });
+    if (initialCamera.source === 'session') {
+      updateLoaderStatus('Restoring your last world view...');
+      applyCameraSession(viewer, initialCamera.state);
+    } else if (initialCamera.source === 'globe') {
+      updateLoaderStatus('Global view ready. Awaiting selection...');
+      setDefaultGlobeView(viewer);
     } else {
       updateLoaderStatus('Restoring shared view...');
     }
+    cameraSessionPersistence = attachCameraSessionPersistence(viewer, {
+      startAfter: styleManager.hasShareState
+        ? styleManager.initialRestorePromise
+        : Promise.resolve(),
+    });
+    cameraPageHideHandler = (event) => {
+      if (event.persisted === true) return;
+      window.removeEventListener('pagehide', cameraPageHideHandler);
+      cameraPageHideHandler = null;
+      cameraSessionPersistence?.destroy({ save: true });
+    };
+    window.addEventListener('pagehide', cameraPageHideHandler);
+    styleManager.addDisposeCallback(() => {
+      if (cameraPageHideHandler) {
+        window.removeEventListener('pagehide', cameraPageHideHandler);
+        cameraPageHideHandler = null;
+      }
+      cameraSessionPersistence?.destroy({ save: true });
+    });
 
     // Initialize data layer manager
     const dataManager = new DataLayerManager(viewer, {
@@ -577,6 +610,7 @@ async function init() {
       instrumentPanel,
       weatherEffects,
       cockpitCloudEffects,
+      cameraSessionPersistence,
       rendererCapabilities,
       getRendererProfile: () => rendererRecovery?.getProfile?.() || rendererProfile,
       getRendererDiagnostics: () => rendererDiagnostics({
@@ -590,6 +624,11 @@ async function init() {
     window.__godsEyeView.voiceCommands = initGevVoiceCommands({ viewer, styleManager, dataManager, sceneDirector, annotations });
 
   } catch (error) {
+    if (cameraPageHideHandler) {
+      window.removeEventListener('pagehide', cameraPageHideHandler);
+      cameraPageHideHandler = null;
+    }
+    cameraSessionPersistence?.destroy({ save: false });
     destroyTerminalIntegration?.();
     rendererRecovery?.destroy();
     clearTimeout(rendererStatusHideTimer);

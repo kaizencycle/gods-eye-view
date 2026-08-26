@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { ShareLinkManager, decodeShareCreatedAtMs } from './sharelink.js';
 import { createDefaultLayerState } from './data/layerState.js';
+import { isCameraHomeActive } from './cameraHomeState.js';
 
 const uiSource = fs.readFileSync(new URL('./ui.js', import.meta.url), 'utf8');
 
@@ -164,6 +165,8 @@ test('non-finite camera coordinates fail closed without reserving restoration', 
     '#lat=10&lon=-Infinity',
     '#lat=1e309&lon=20',
     '#v=2&lat=%2BInfinity&lon=20',
+    '#lat=10junk&lon=20',
+    '#lat=10&lon=20junk',
   ]) {
     const manager = makeManager(hash);
     assert.equal(manager.parseInitialHash(), null, hash);
@@ -172,6 +175,58 @@ test('non-finite camera coordinates fail closed without reserving restoration', 
 
   assert.ok(makeManager('#lat=10&lon=20').parseInitialHash());
   assert.ok(makeManager('#v=2&lat=-10.5&lon=20.25').parseInitialHash());
+});
+
+test('shared heading is normalized before camera authority is granted', () => {
+  assert.equal(makeManager('#lat=10&lon=20&heading=725').parseInitialHash().heading, 5);
+  assert.equal(makeManager('#lat=10&lon=20&heading=-10').parseInitialHash().heading, 350);
+});
+
+test('canonical Home adaptation requires an explicit share marker', () => {
+  const unmarked = makeManager(
+    '#lat=0.05&lon=-0.05&alt=18050000&heading=12&pitch=-87&roll=3',
+  ).parseInitialHash();
+  assert.equal(unmarked.home, false);
+  assert.equal(unmarked.lat, 0.05);
+  assert.equal(unmarked.heading, 12);
+
+  const marked = makeManager(
+    '#lat=0&lon=0&alt=18000000&heading=0&pitch=-90&roll=0&home=1',
+  ).parseInitialHash();
+  assert.equal(marked.home, true);
+});
+
+test('successfully applied marked share retains semantic Home authority', async () => {
+  const manager = makeManager(
+    '#lat=0&lon=0&alt=18000000&heading=0&pitch=-90&roll=0&home=1',
+  );
+  const state = manager.parseInitialHash();
+  manager.viewer.scene = {
+    canvas: { clientWidth: 1440, clientHeight: 900 },
+    requestRender() {},
+  };
+  manager.viewer.camera.cancelFlight = () => {};
+  manager.viewer.camera.setView = () => {};
+  manager.viewer.camera.flyTo = (options) => options.complete();
+
+  await manager.applyState(state);
+
+  assert.equal(isCameraHomeActive(manager.viewer), true);
+});
+
+test('out-of-range shared cameras fail closed so session/global fallback can win', () => {
+  for (const hash of [
+    '#lat=91&lon=20',
+    '#lat=10&lon=181',
+    '#lat=10&lon=20&alt=-1',
+    '#lat=10&lon=20&alt=100000001',
+    '#lat=10&lon=20&pitch=-120',
+    '#lat=10&lon=20&roll=181',
+  ]) {
+    const manager = makeManager(hash);
+    assert.equal(manager.parseInitialHash(), null, hash);
+    assert.equal(manager._initialRestorePending, false, hash);
+  }
 });
 
 test('incoming state suppresses premature hash replacement until restoration', () => {

@@ -16,6 +16,7 @@ import { LOCATIONS, CITY_POIS, GLOBE_VIEW, flyToGlobeView, flyToPresetLocation, 
 import { locationMiniStatus } from './locationStatus.js';
 import { interruptCameraMotion } from './cameraVerbs.js';
 import { cockpitWeatherControlState } from './cockpitCloudEffects.js';
+import { setCameraHomeActive } from './cameraHomeState.js';
 import {
   rendererFogEnabled,
   rendererPostProcessingAllowed,
@@ -2219,6 +2220,7 @@ export class StyleManager {
     this._awarenessSelectedHandler = null;
     this._awarenessClearedHandler = null;
     this._disposed = false;
+    this._disposeCallbacks = new Set();
     this._draggableResizeObserver = null;
 
     // DOM refs
@@ -2768,6 +2770,7 @@ export class StyleManager {
   /** Advance camera authority and settle any older search UI immediately. */
   _stampNavigation({ cancelPendingSelection = true, clearSearchedLocation = true } = {}) {
     this._navigationGeneration += 1;
+    setCameraHomeActive(this.viewer, false);
     // A newer destination owns the camera, so the last free-text search is no
     // longer where we are. DEFERRED navigation opts out here and clears at the
     // reassert seam instead: a geocode that never resolves moves no camera, and
@@ -9672,6 +9675,7 @@ export class StyleManager {
       return;
     }
 
+    if (!this.orbitController.active) this._stampNavigation();
     const isActive = this.orbitController.toggle(this._currentTarget, {
       radius: this._currentPoi?.alt || 500,
       pitch: this._currentPoi?.pitch || -30,
@@ -9787,6 +9791,8 @@ export class StyleManager {
     this._stampNavigation();
     interruptCameraMotion('reset-globe');
     this._stopOrbit();
+    this._currentTarget = null;
+    this._currentPoi = null;
     this.cockpitView?.exit({ restoreTracking: false });
     try {
       militaryAwarenessLayer.releaseCameraOwnership?.({ origin: 'tool' });
@@ -9808,6 +9814,7 @@ export class StyleManager {
     this._globeResetPromise = resetPromise;
     let settled = false;
     let timer = null;
+    let target = null;
     const finish = (cancelled = false) => {
       if (settled) return;
       settled = true;
@@ -9818,7 +9825,7 @@ export class StyleManager {
         ok: !cancelled,
         action: 'zoom_to_globe',
         cancelled,
-        heightKm: Math.round(GLOBE_VIEW.heightM / 1000),
+        heightKm: Math.round((target?.heightM || GLOBE_VIEW.heightM) / 1000),
         centeredOn: {
           latitude: Number(Cesium.Math.toDegrees(carto.latitude).toFixed(2)),
           longitude: Number(Cesium.Math.toDegrees(carto.longitude).toFixed(2)),
@@ -9831,11 +9838,12 @@ export class StyleManager {
     };
     timer = window.setTimeout(() => {
       const height = this.viewer.camera.positionCartographic?.height;
-      finish(!Number.isFinite(height) || Math.abs(height - GLOBE_VIEW.heightM) > 1000);
+      const expectedHeight = target?.heightM || GLOBE_VIEW.heightM;
+      finish(!Number.isFinite(height) || Math.abs(height - expectedHeight) > 1000);
     }, 4200);
     this._resetGlobeBtn?.setAttribute('aria-label', 'Resetting to full globe view');
     this._cockpitResetGlobeBtn?.setAttribute('aria-label', 'Resetting cockpit to full globe view');
-    const target = flyToGlobeView(this.viewer, {
+    target = flyToGlobeView(this.viewer, {
       onComplete: () => finish(false),
       onCancel: () => finish(true),
     });
@@ -10191,6 +10199,12 @@ export class StyleManager {
     return this._initialShareRestorePromise || Promise.resolve({ status: 'not-requested' });
   }
 
+  addDisposeCallback(callback) {
+    if (typeof callback !== 'function' || this._disposed) return () => {};
+    this._disposeCallbacks.add(callback);
+    return () => this._disposeCallbacks.delete(callback);
+  }
+
   _settleInitialShareRestore(result) {
     if (!this._resolveInitialShareRestore) return;
     const resolve = this._resolveInitialShareRestore;
@@ -10212,6 +10226,10 @@ export class StyleManager {
     this._globalStatusNotice = null;
     if (this._globalLoadingStatus) this._globalLoadingStatus.hidden = true;
     this._disposed = true;
+    for (const callback of this._disposeCallbacks) {
+      try { callback(); } catch { /* teardown callbacks are best-effort */ }
+    }
+    this._disposeCallbacks.clear();
     // Revoke persistence/hash authority before teardown can emit manager changes.
     this._layerStateCoordinator?.destroy();
     this._layerStateCoordinator = null;
