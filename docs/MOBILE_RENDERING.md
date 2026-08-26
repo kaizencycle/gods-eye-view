@@ -94,12 +94,14 @@ browser cannot supply Cesium's required GPU context.
 
 | Profile | Selection | Atmosphere | Post-FX | MSAA | Resolution |
 | --- | --- | --- | --- | --- | --- |
-| `high` | Full required capabilities and resource budget | On | On | 4 | 1.0 |
-| `balanced` | Full shader capabilities with a moderate resource budget | On | On | 2 | 0.9 |
-| `mobile` | Limited float/MSAA/resource budget | Off | Off | 1 | 0.75 |
-| `safe` | Missing high precision, very small limits, or runtime shader fallback | Off | Off | 1 | 0.6 |
+| `ultra` | Full required capabilities and resource budget | On | On | 4 | 1.0 |
+| `high` | Strong desktop capability | On | On | 2 | 1.0 |
+| `balanced` | Moderate shader capability | Off | On | 1 | 0.85 |
+| `mobile` | Limited float/MSAA/resource budget | Off | Off | 1 | 0.7 |
+| `minimal` | Shader-light Cesium 2D + OSM | Off | Off | 1 | 0.6 |
+| `fallback` | Non-WebGL static OSM shell | N/A | N/A | N/A | CSS |
 
-`mobile` and `safe` prioritize a stable globe over atmospheric and
+`mobile` and `minimal` prioritize a stable renderer over atmospheric and
 post-processing fidelity. They also disable fog, shadows, bloom, sharpen, and
 custom style shader activation.
 
@@ -114,7 +116,7 @@ therefore remains required:
 
 1. Listen to Cesium `scene.renderError`.
 2. Detect shader compilation/link failures without relying on a device name.
-3. Apply the next lower profile, ending at `safe`.
+3. Apply the next lower profile through `minimal`, ending at static `fallback`.
 4. Disable atmosphere and the complete post-process collection before the next
    frame.
 5. Update runtime MSAA immediately. If the fallback changes construction-only
@@ -124,8 +126,9 @@ therefore remains required:
 6. Show a concise compatibility status instead of Cesium's raw shader output.
 7. Keep detailed compiler diagnostics in development logs only.
 
-Recovery is bounded: each profile can be entered once, and a repeated failure
-in `safe` becomes an honest terminal renderer error rather than a retry loop.
+Recovery is bounded: each profile is pinned in the URL for its attempt, which
+prevents reload loops. A failed `minimal` attempt reconstructs into the
+non-WebGL static fallback.
 
 ## User-visible diagnostics
 
@@ -147,7 +150,7 @@ desktop responsive mode do not prove Metal shader behavior.
 
 | Browser | Expected path | Verification status |
 | --- | --- | --- |
-| iPhone Safari | Automatic `mobile` or runtime `safe` fallback | Required on physical device |
+| iPhone Safari | Automatic `mobile`, `minimal`, or static fallback | Required on physical device |
 | iPad Safari | Automatic profile with runtime fallback | Required on physical device |
 | Chrome Android | Automatic profile | Required on physical device |
 | Chrome desktop | `high`/`balanced`; existing behavior retained | Automated Chromium coverage |
@@ -161,12 +164,12 @@ For each target verify:
 - data layers can be toggled;
 - no blank canvas or raw shader dialog appears;
 - fallback status matches the active profile;
-- desktop high profile retains atmosphere and post-processing controls.
+- desktop ultra/high profiles retain atmosphere and post-processing controls.
 
 ## Performance recommendations
 
-- Keep mobile/safe resolution scale below device pixel ratio.
-- Avoid MSAA above one sample in mobile/safe.
+- Keep mobile/minimal resolution scale below device pixel ratio.
+- Avoid MSAA above one sample in mobile/minimal.
 - Keep atmosphere and post-processing disabled after fallback.
 - Leave cockpit clouds opt-in and low-resolution.
 - Preserve request-render mode while idle.
