@@ -99,3 +99,20 @@ test('createPacket rejects invented integrity assessments', async () => {
     /confidence must be "unassessed"/i,
   );
 });
+
+test('createPacket rejects missing numeric evidence instead of coercing it to zero', async () => {
+  await assert.rejects(
+    createPacket({
+      ...OBSERVATION,
+      location: { ...OBSERVATION.location, latitude: null },
+    }),
+    /location\.latitude must be a finite number/i,
+  );
+});
+
+test('createPacket rejects implementation-dependent timestamp strings', async () => {
+  await assert.rejects(
+    createPacket({ ...OBSERVATION, observedAt: 'August 25, 2026 14:32 UTC' }),
+    /observedAt must be an ISO 8601 UTC timestamp/i,
+  );
+});

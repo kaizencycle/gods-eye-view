@@ -53,9 +53,12 @@ The adapter is attached in `src/main.js` after production layers are registered
 and before passive layer restoration starts.
 
 1. The adapter subscribes to `DataLayerManager`.
-2. A successful earthquake `visibility` or `refresh` event causes the adapter
-   to read `earthquakesLayer.getAnalystRecords()` and retain canonical
-   fingerprints for that accepted snapshot.
+2. A completed earthquake enable transition (`visibility-transition` with
+   `lifecycleState: "enabling"`, followed by enabled `visibility`) or a
+   successful `refresh` event causes the adapter to read
+   `earthquakesLayer.getAnalystRecords()` and retain canonical fingerprints for
+   that accepted snapshot. A standalone idempotent `visibility` event is not
+   accepted.
 3. `refresh-failed` and `refresh-cancelled` do not advance the accepted
    snapshot.
 4. A separate Cesium click handler recognizes only `earthquake:*` picks.
@@ -87,6 +90,14 @@ No field is rounded for hashing. An identical normalized observation and click
 timestamp therefore produces an identical packet ID; any covered field change
 produces a different ID.
 
+### Security boundary
+
+The fingerprint proves deterministic self-consistency, not authenticity. It
+detects accidental corruption and a body changed without updating its identity,
+but a party able to rewrite the JSON can also recompute both unsigned hash
+fields. Signatures and authenticated custody are deliberately absent from
+v0.1.
+
 ## Local JSON
 
 Packets use these local-storage keys:
@@ -98,8 +109,10 @@ epicon:v0.1:packet:<packet_id>
 
 The index contains packet IDs. Each packet key contains pretty-printed JSON.
 Saving the same deterministic packet is idempotent. If browser local storage is
-unavailable, the package falls back to session-only memory so the optional
-prototype cannot prevent God's Eye View from starting.
+unavailable—or rejects a write because of privacy or quota policy—the package
+falls back to session-only memory so the optional prototype cannot prevent
+God's Eye View from starting. An existing packet ID cannot be overwritten with
+different bytes.
 
 No packet is sent over the network.
 

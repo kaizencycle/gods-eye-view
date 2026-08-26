@@ -28,6 +28,8 @@ test('main wires the invisible adapter through public earthquake records', async
   assert.ok(finalizeAt >= 0 && attachAt > finalizeAt);
   assert.ok(restoreAt > attachAt);
   assert.match(source, /getRecords:\s*\(\)\s*=>\s*earthquakesLayer\.getAnalystRecords\(\)/);
+  assert.match(source, /bindTrackingClickGesture\(handler,\s*\(click,\s*gesture\)/);
+  assert.match(source, /isTrackingSelectionGesture\(gesture\)/);
   assert.match(source, /mobiusAdapter,/);
 });
 

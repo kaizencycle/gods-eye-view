@@ -11,9 +11,10 @@ function createMemoryStorage() {
   };
 }
 
-function createManager() {
+function createManager(enabled = false) {
   let listener = null;
   return {
+    isEnabled: () => enabled,
     subscribe(callback) {
       listener = callback;
       return () => {
@@ -59,8 +60,8 @@ const acceptedRecord = Object.freeze({
   place: 'Adapter fixture',
 });
 
-function createAdapterFixture() {
-  const manager = createManager();
+function createAdapterFixture({ managerEnabled = false } = {}) {
+  const manager = createManager(managerEnabled);
   const clicks = createClickHarness();
   const storage = createMemoryStorage();
   let records = [structuredClone(acceptedRecord)];
@@ -79,7 +80,7 @@ function createAdapterFixture() {
       getRecords: () => structuredClone(records),
     },
     createClickHandler: () => clicks.factory(),
-    leftClickEventType: 'LEFT_CLICK',
+    bindClickHandler: (handler, onClick) => handler.setInputAction(onClick),
     storage,
     now: () => new Date('2026-08-25T14:32:00Z'),
     logger: {
@@ -101,13 +102,23 @@ function createAdapterFixture() {
   };
 }
 
-test('successful earthquake visibility snapshots records for click capture', async () => {
-  const fixture = createAdapterFixture();
-  fixture.manager.emit({
+function emitSuccessfulEnable(manager) {
+  manager.emit({
+    type: 'visibility-transition',
+    layerId: 'earthquakes',
+    enabled: true,
+    lifecycleState: 'enabling',
+  });
+  manager.emit({
     type: 'visibility',
     layerId: 'earthquakes',
     enabled: true,
   });
+}
+
+test('successful earthquake visibility snapshots records for click capture', async () => {
+  const fixture = createAdapterFixture();
+  emitSuccessfulEnable(fixture.manager);
 
   fixture.clicks.click();
   await fixture.adapter.whenIdle();
@@ -120,13 +131,23 @@ test('successful earthquake visibility snapshots records for click capture', asy
   assert.equal(packet.location.latitude, acceptedRecord.lat);
 });
 
-test('failed refresh cannot promote a partial displayed record', async () => {
-  const fixture = createAdapterFixture();
+test('attaching to an enabled layer does not trust records without a success event', async () => {
+  const fixture = createAdapterFixture({ managerEnabled: true });
   fixture.manager.emit({
     type: 'visibility',
     layerId: 'earthquakes',
     enabled: true,
   });
+
+  fixture.clicks.click();
+  await fixture.adapter.whenIdle();
+
+  assert.deepEqual(fixture.adapter.listPacketIds(), []);
+});
+
+test('failed refresh cannot promote a partial displayed record', async () => {
+  const fixture = createAdapterFixture();
+  emitSuccessfulEnable(fixture.manager);
   fixture.setRecords([{ ...acceptedRecord, magnitude: 8.8 }]);
   fixture.manager.emit({
     type: 'refresh-failed',
@@ -150,11 +171,7 @@ test('failed refresh cannot promote a partial displayed record', async () => {
 
 test('successful refresh advances the accepted snapshot', async () => {
   const fixture = createAdapterFixture();
-  fixture.manager.emit({
-    type: 'visibility',
-    layerId: 'earthquakes',
-    enabled: true,
-  });
+  emitSuccessfulEnable(fixture.manager);
   fixture.setRecords([{ ...acceptedRecord, magnitude: 6.3 }]);
   fixture.manager.emit({
     type: 'refresh',
@@ -171,11 +188,7 @@ test('successful refresh advances the accepted snapshot', async () => {
 
 test('non-earthquake picks are ignored', async () => {
   const fixture = createAdapterFixture();
-  fixture.manager.emit({
-    type: 'visibility',
-    layerId: 'earthquakes',
-    enabled: true,
-  });
+  emitSuccessfulEnable(fixture.manager);
   fixture.setPickedId('flight:abc123');
 
   fixture.clicks.click();

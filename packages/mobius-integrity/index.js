@@ -11,9 +11,10 @@ const EARTHQUAKE_LAYER_ID = 'earthquakes';
 const EARTHQUAKE_PICK_PREFIX = 'earthquake:';
 
 function finiteNumber(value, field) {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) throw new TypeError(`${field} must be finite`);
-  return Object.is(numeric, -0) ? 0 : numeric;
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new TypeError(`${field} must be a finite number`);
+  }
+  return Object.is(value, -0) ? 0 : value;
 }
 
 export function normalizeEarthquakeRecord(record) {
@@ -23,7 +24,7 @@ export function normalizeEarthquakeRecord(record) {
   const id = String(record.id || '').trim();
   if (!id) throw new TypeError('Earthquake record id is required');
   const place = String(record.place ?? '').trim();
-  return {
+  const normalized = {
     id,
     magnitude: finiteNumber(record.magnitude, 'magnitude'),
     depthKm: finiteNumber(record.depthKm, 'depthKm'),
@@ -32,6 +33,10 @@ export function normalizeEarthquakeRecord(record) {
     timeMs: finiteNumber(record.timeMs, 'timeMs'),
     place: place || null,
   };
+  if (!Number.isFinite(new Date(normalized.timeMs).getTime())) {
+    throw new TypeError('timeMs must identify a valid timestamp');
+  }
+  return normalized;
 }
 
 function recordFingerprint(record) {
@@ -78,7 +83,7 @@ export function attachMobiusAdapter({
   dataManager,
   source,
   createClickHandler,
-  leftClickEventType,
+  bindClickHandler,
   registerPickOwnership = null,
   storage,
   now = () => new Date(),
@@ -96,10 +101,13 @@ export function attachMobiusAdapter({
   if (typeof createClickHandler !== 'function') {
     throw new TypeError('Mobius adapter requires a click-handler factory');
   }
+  if (typeof bindClickHandler !== 'function') {
+    throw new TypeError('Mobius adapter requires the shared click-gesture binder');
+  }
 
   const packetStore = createLocalPacketStore(storage);
   const acceptedRecords = new Map();
-  let hasAcceptedSnapshot = false;
+  let enableTransitionPending = false;
   let disposed = false;
   let pendingCapture = Promise.resolve(null);
 
@@ -114,39 +122,55 @@ export function attachMobiusAdapter({
     for (const record of records) next.set(record.id, recordFingerprint(record));
     acceptedRecords.clear();
     for (const [id, fingerprint] of next) acceptedRecords.set(id, fingerprint);
-    hasAcceptedSnapshot = true;
   };
 
   const unsubscribe = dataManager.subscribe((change) => {
     if (disposed || change?.layerId !== EARTHQUAKE_LAYER_ID) return;
-    if (change.type === 'visibility' && change.enabled === false) {
-      acceptedRecords.clear();
-      hasAcceptedSnapshot = false;
+    if (change.type === 'visibility-transition') {
+      enableTransitionPending = change.lifecycleState === 'enabling';
       return;
     }
-    const firstSuccessfulVisibility = change.type === 'visibility'
+    if (change.type === 'visibility' && change.enabled === false) {
+      acceptedRecords.clear();
+      enableTransitionPending = false;
+      return;
+    }
+    const completedSuccessfulEnable = change.type === 'visibility'
       && change.enabled === true
-      && !hasAcceptedSnapshot;
-    if (firstSuccessfulVisibility || change.type === 'refresh') {
+      && enableTransitionPending;
+    if (completedSuccessfulEnable || change.type === 'refresh') {
       try {
         snapshotAcceptedRecords();
       } catch (error) {
         logger.warn?.(`[EPICON] Could not snapshot accepted earthquakes: ${error.message}`);
       }
     }
+    if (change.type === 'visibility' || change.type === 'visibility-failed'
+      || change.type === 'visibility-cancelled' || change.type === 'visibility-blocked') {
+      enableTransitionPending = false;
+    }
   });
 
-  if (dataManager.isEnabled?.(EARTHQUAKE_LAYER_ID)) snapshotAcceptedRecords();
-
-  const releasePickOwnership = typeof registerPickOwnership === 'function'
-    ? registerPickOwnership((pickedId) => pickedId.startsWith(EARTHQUAKE_PICK_PREFIX))
-    : null;
-
-  const handler = createClickHandler(viewer.scene.canvas);
-  if (!handler || typeof handler.setInputAction !== 'function') {
+  let handler;
+  try {
+    handler = createClickHandler(viewer.scene.canvas);
+  } catch (error) {
     unsubscribe?.();
-    releasePickOwnership?.();
+    throw error;
+  }
+  if (!handler || typeof handler !== 'object') {
+    unsubscribe?.();
     throw new TypeError('Mobius click-handler factory returned an invalid handler');
+  }
+  let releasePickOwnership = null;
+  try {
+    releasePickOwnership = typeof registerPickOwnership === 'function'
+      ? registerPickOwnership((pickedId) => pickedId.startsWith(EARTHQUAKE_PICK_PREFIX))
+      : null;
+  } catch (error) {
+    unsubscribe?.();
+    handler.destroy?.();
+    throw error;
   }
 
   const captureClick = async (click) => {
@@ -168,19 +192,26 @@ export function attachMobiusAdapter({
       observedAt instanceof Date ? observedAt.toISOString() : observedAt,
       source.name || 'USGS',
     ));
-    packetStore.save(packet);
+    await packetStore.save(packet);
     logger.info?.(`[EPICON] Saved packet ${packet.packet_id}`);
     return packet;
   };
 
-  handler.setInputAction((click) => {
-    pendingCapture = pendingCapture
-      .then(() => captureClick(click))
-      .catch((error) => {
-        logger.warn?.(`[EPICON] Packet capture failed: ${error.message}`);
-        return null;
-      });
-  }, leftClickEventType);
+  try {
+    bindClickHandler(handler, (click) => {
+      pendingCapture = pendingCapture
+        .then(() => captureClick(click))
+        .catch((error) => {
+          logger.warn?.(`[EPICON] Packet capture failed: ${error.message}`);
+          return null;
+        });
+    });
+  } catch (error) {
+    unsubscribe?.();
+    releasePickOwnership?.();
+    handler.destroy?.();
+    throw error;
+  }
 
   return Object.freeze({
     listPacketIds: () => packetStore.listPacketIds(),
@@ -192,7 +223,7 @@ export function attachMobiusAdapter({
       if (disposed) return;
       disposed = true;
       acceptedRecords.clear();
-      hasAcceptedSnapshot = false;
+      enableTransitionPending = false;
       unsubscribe?.();
       releasePickOwnership?.();
       handler.destroy?.();

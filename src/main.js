@@ -24,6 +24,10 @@ import { initAnnotations } from './annotations/index.js';
 import { initLogoGaze } from './logoGaze.js';
 import { initCockpitCloudEffects } from './cockpitCloudEffects.js';
 import { registerPickOwner, unregisterPickOwner } from './data/pickRegistry.js';
+import {
+  bindTrackingClickGesture,
+  isTrackingSelectionGesture,
+} from './data/trackingClickGesture.js';
 import { attachMobiusAdapter } from '../packages/mobius-integrity/index.js';
 import {
   installRenderGovernor,
@@ -250,7 +254,11 @@ async function init() {
         getRecords: () => earthquakesLayer.getAnalystRecords(),
       },
       createClickHandler: (canvas) => new Cesium.ScreenSpaceEventHandler(canvas),
-      leftClickEventType: Cesium.ScreenSpaceEventType.LEFT_CLICK,
+      bindClickHandler: (handler, onClick) => {
+        bindTrackingClickGesture(handler, (click, gesture) => {
+          if (isTrackingSelectionGesture(gesture)) onClick(click);
+        });
+      },
       registerPickOwnership: (predicate) => {
         const ownerId = 'mobius-earthquakes';
         registerPickOwner(ownerId, predicate);

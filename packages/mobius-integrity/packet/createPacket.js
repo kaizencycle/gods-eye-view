@@ -14,12 +14,21 @@ function requiredText(value, field) {
 }
 
 function finiteNumber(value, field) {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) throw new TypeError(`${field} must be finite`);
-  return Object.is(numeric, -0) ? 0 : numeric;
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new TypeError(`${field} must be a finite number`);
+  }
+  return Object.is(value, -0) ? 0 : value;
 }
 
 function canonicalTimestamp(value, field) {
+  if (value instanceof Date) {
+    if (!Number.isFinite(value.getTime())) throw new TypeError(`${field} must be a valid timestamp`);
+    return value.toISOString();
+  }
+  if (typeof value !== 'string'
+    || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(value)) {
+    throw new TypeError(`${field} must be an ISO 8601 UTC timestamp`);
+  }
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) throw new TypeError(`${field} must be a valid timestamp`);
   return date.toISOString();

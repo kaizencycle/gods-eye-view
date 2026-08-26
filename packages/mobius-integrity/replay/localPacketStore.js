@@ -1,4 +1,5 @@
 import { assertPacket } from '../schema/validation.js';
+import { validateFingerprint } from '../hashing/computeFingerprint.js';
 import {
   deserializePacket,
   serializePacket,
@@ -34,33 +35,93 @@ function packetStorageKey(packetId) {
   return `${EPICON_PACKET_KEY_PREFIX}${packetId}`;
 }
 
-function readIndex(storage) {
-  try {
-    const parsed = JSON.parse(storage.getItem(EPICON_PACKET_INDEX_KEY) || '[]');
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter((id) => typeof id === 'string' && /^[a-f0-9]{64}$/.test(id));
-  } catch {
-    return [];
-  }
-}
-
 /** Create a local JSON packet repository backed by browser localStorage. */
 export function createLocalPacketStore(storage = safeLocalStorage()) {
-  const target = requireStorage(storage);
+  let target = requireStorage(storage);
+  const memory = createMemoryStorage();
+
+  const useMemory = () => {
+    target = memory;
+  };
+
+  const getItem = (key) => {
+    try {
+      return target.getItem(key);
+    } catch {
+      useMemory();
+      return target.getItem(key);
+    }
+  };
+
+  const readIndex = () => {
+    try {
+      const parsed = JSON.parse(getItem(EPICON_PACKET_INDEX_KEY) || '[]');
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter((id) => typeof id === 'string' && /^[a-f0-9]{64}$/.test(id));
+    } catch {
+      return [];
+    }
+  };
+
   return Object.freeze({
-    save(packet) {
+    async save(packet) {
       assertPacket(packet);
-      target.setItem(packetStorageKey(packet.packet_id), serializePacket(packet));
-      const ids = readIndex(target);
-      if (!ids.includes(packet.packet_id)) {
-        ids.push(packet.packet_id);
-        target.setItem(EPICON_PACKET_INDEX_KEY, JSON.stringify(ids));
+      if (!(await validateFingerprint(packet))) {
+        throw new TypeError('Cannot save an EPICON packet with an invalid fingerprint');
+      }
+      const key = packetStorageKey(packet.packet_id);
+      const serialized = serializePacket(packet);
+      const existing = getItem(key);
+      if (existing !== null && existing !== serialized) {
+        throw new Error(`Conflicting EPICON packet already exists for ${packet.packet_id}`);
+      }
+      const ids = readIndex();
+      if (!ids.includes(packet.packet_id)) ids.push(packet.packet_id);
+      const serializedIndex = JSON.stringify(ids);
+      const fallbackPackets = new Map();
+      const writeTarget = target;
+      for (const id of ids) {
+        const stored = id === packet.packet_id
+          ? serialized
+          : getItem(packetStorageKey(id));
+        if (stored !== null) fallbackPackets.set(id, stored);
+      }
+      if (target !== writeTarget) {
+        for (const [id, stored] of fallbackPackets) {
+          target.setItem(packetStorageKey(id), stored);
+        }
+        target.setItem(
+          EPICON_PACKET_INDEX_KEY,
+          JSON.stringify([...fallbackPackets.keys()]),
+        );
+        return packet.packet_id;
+      }
+      try {
+        target.setItem(key, serialized);
+        target.setItem(EPICON_PACKET_INDEX_KEY, serializedIndex);
+      } catch {
+        const failedTarget = target;
+        if (existing === null) {
+          try {
+            failedTarget.removeItem?.(key);
+          } catch {
+            // Best-effort cleanup of a packet written before its index failed.
+          }
+        }
+        useMemory();
+        for (const [id, stored] of fallbackPackets) {
+          target.setItem(packetStorageKey(id), stored);
+        }
+        target.setItem(
+          EPICON_PACKET_INDEX_KEY,
+          JSON.stringify([...fallbackPackets.keys()]),
+        );
       }
       return packet.packet_id;
     },
 
     read(packetId) {
-      const serialized = target.getItem(packetStorageKey(String(packetId || '')));
+      const serialized = getItem(packetStorageKey(String(packetId || '')));
       if (!serialized) return null;
       try {
         return assertPacket(deserializePacket(serialized));
@@ -70,11 +131,11 @@ export function createLocalPacketStore(storage = safeLocalStorage()) {
     },
 
     readJson(packetId) {
-      return target.getItem(packetStorageKey(String(packetId || '')));
+      return getItem(packetStorageKey(String(packetId || '')));
     },
 
     listPacketIds() {
-      return [...readIndex(target)];
+      return [...readIndex()];
     },
   });
 }
