@@ -267,10 +267,19 @@ module would depend on private manager internals and is not recommended.
 An isolated package cannot execute merely by existing in `packages/`; the
 application must load it. The smallest explicit integration is one import and
 one attachment call at the composition root after `dataManager` and the viewer
-exist:
+exist. The composition root must also pass a public record reader; the package
+must not discover the layer by reaching into `dataManager.layers`:
 
 ```js
-attachMobiusIntegrity({ viewer, dataManager });
+attachMobiusIntegrity({
+  viewer,
+  dataManager,
+  sources: {
+    earthquakes: {
+      getRecords: () => earthquakesLayer.getAnalystRecords(),
+    },
+  },
+});
 ```
 
 That call is proposed Phase 2/3 wiring, not present in Phase 1. It should return
