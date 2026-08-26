@@ -12,6 +12,15 @@ export class TerminalVerificationUnavailableError extends Error {
   }
 }
 
+export function normalizeTerminalPollMs(value) {
+  if (value === null || value === undefined) return DEFAULT_POLL_MS;
+  if (typeof value === 'string' && value.trim() === '') return DEFAULT_POLL_MS;
+  const parsed = Number(value);
+  return Number.isFinite(parsed)
+    ? Math.max(5_000, Math.min(300_000, Math.floor(parsed)))
+    : DEFAULT_POLL_MS;
+}
+
 function plainObject(value, field) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new TypeError(`${field} must be an object`);
@@ -222,7 +231,7 @@ export class TerminalBridge {
   } = {}) {
     if (typeof fetchFn !== 'function') throw new TypeError('Terminal bridge requires fetch');
     this.terminalUrl = normalizeTerminalUrl(terminalUrl);
-    this.pollMs = Math.max(1_000, Number(pollMs) || DEFAULT_POLL_MS);
+    this.pollMs = normalizeTerminalPollMs(pollMs);
     this.requestTimeoutMs = Math.max(1_000, Number(requestTimeoutMs) || DEFAULT_TIMEOUT_MS);
     this.liveUpdates = liveUpdates === true;
     this.verifyEndpoint = normalizeVerifyEndpoint(verifyEndpoint);

@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import {
   normalizeInstrumentsSnapshot,
+  normalizeTerminalPollMs,
   TerminalBridge,
   TerminalVerificationUnavailableError,
 } from '../terminalBridge.js';
@@ -71,6 +72,14 @@ test('normalization rejects an unknown schema version', () => {
     () => normalizeInstrumentsSnapshot({ ...SNAPSHOT, schema_version: 'UNKNOWN' }),
     /MOBIUS_INSTRUMENTS_1/,
   );
+});
+
+test('poll interval treats blank environment values as unset', () => {
+  assert.equal(normalizeTerminalPollMs(undefined), 15_000);
+  assert.equal(normalizeTerminalPollMs(''), 15_000);
+  assert.equal(normalizeTerminalPollMs('   '), 15_000);
+  assert.equal(normalizeTerminalPollMs('1000'), 5_000);
+  assert.equal(normalizeTerminalPollMs('600000'), 300_000);
 });
 
 test('initialize fetches a snapshot and publishes degraded connection state', async () => {

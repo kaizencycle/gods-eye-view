@@ -29,7 +29,10 @@ import {
   isTrackingSelectionGesture,
 } from './data/trackingClickGesture.js';
 import { attachMobiusAdapter } from '../packages/mobius-integrity/index.js';
-import { TerminalBridge } from '../packages/mobius-integration/terminalBridge.js';
+import {
+  normalizeTerminalPollMs,
+  TerminalBridge,
+} from '../packages/mobius-integration/terminalBridge.js';
 import { attachPacketVerification } from '../packages/mobius-integration/packetVerification.js';
 import { attachInstrumentPanel } from './hud/instrumentPanel.js';
 import './hud/instrumentPanel.css';
@@ -69,13 +72,6 @@ function describeError(error) {
     }
   }
   return String(error);
-}
-
-function terminalPollInterval(value) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed)
-    ? Math.max(5_000, Math.min(300_000, Math.floor(parsed)))
-    : 15_000;
 }
 
 /**
@@ -285,7 +281,7 @@ async function init() {
       terminalBridge = new TerminalBridge({
         terminalUrl: import.meta.env.VITE_TERMINAL_API_URL
           || 'https://terminal.mobius-substrate.com',
-        pollMs: terminalPollInterval(import.meta.env.VITE_TERMINAL_POLL_MS),
+        pollMs: normalizeTerminalPollMs(import.meta.env.VITE_TERMINAL_POLL_MS),
         liveUpdates: import.meta.env.VITE_TERMINAL_LIVE_UPDATES !== 'false',
         // Browser verification remains disabled unless a same-origin server
         // proxy is explicitly configured. Service credentials never enter Vite.

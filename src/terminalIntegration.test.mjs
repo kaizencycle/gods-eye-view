@@ -44,6 +44,8 @@ test('instrument panel participates in right-rail and overlay layout', async () 
   assert.match(overlay, /'#terminal-instruments-panel'/);
   assert.match(styles, /#right-context-rail > #terminal-instruments-panel/);
   assert.match(ui, /'terminal-instruments-panel'/);
+  assert.match(ui, /panel\.hidden/);
+  assert.match(ui, /style\.display !== 'none'/);
 });
 
 test('instrument renderer never injects Terminal strings through innerHTML', async () => {

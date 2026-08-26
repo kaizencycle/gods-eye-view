@@ -6848,7 +6848,11 @@ export class StyleManager {
     const stack = this._rightPanelStack;
     if (!stack) return;
 
-    const panels = [...stack.children].filter((panel) => panel.matches('[data-panel-id]'));
+    const panels = [...stack.children].filter((panel) => {
+      if (!panel.matches('[data-panel-id]') || panel.hidden) return false;
+      const style = getComputedStyle(panel);
+      return style.display !== 'none' && style.visibility !== 'hidden';
+    });
     if (!this.hud.visible || this.hud.getVariant() !== 'tactical') {
       for (const panel of panels.filter((item) => item.classList.contains('layout-auto-collapsed'))) {
         panel.classList.remove('collapsed', 'layout-auto-collapsed');
